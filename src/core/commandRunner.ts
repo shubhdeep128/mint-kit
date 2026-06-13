@@ -6,8 +6,13 @@ export type CommandResult = {
   stderr: string;
 };
 
+export type CommandRunOptions = {
+  cwd?: string | undefined;
+  env?: Record<string, string | undefined> | undefined;
+};
+
 export type CommandRunner = {
-  run(command: string, args: string[]): Promise<CommandResult>;
+  run(command: string, args: string[], options?: CommandRunOptions): Promise<CommandResult>;
 };
 
 export type InteractiveCommandRunner = {
@@ -15,9 +20,16 @@ export type InteractiveCommandRunner = {
 };
 
 export const execaCommandRunner: CommandRunner = {
-  async run(command, args) {
+  async run(command, args, options) {
     try {
-      const result = await execa(command, args, {reject: false});
+      const execaOptions = {
+        reject: false,
+        ...(options?.cwd ? {cwd: options.cwd} : {}),
+        ...(options?.env ? {env: options.env} : {}),
+      };
+      const result = await execa(command, args, {
+        ...execaOptions,
+      });
       return {
         exitCode: result.exitCode ?? (result.failed ? 1 : 0),
         stdout: result.stdout,

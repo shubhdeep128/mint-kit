@@ -1,8 +1,11 @@
-import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {describe, expect, it, vi} from "vitest";
 import {runMintCli} from "../src/cli.js";
+import {scaffoldMintApp} from "../src/core/appScaffold.js";
+import {upsertEnvFile} from "../src/core/envFile.js";
+import {markProvider} from "../src/state/connectState.js";
 
 describe("mint cli", () => {
   it("runs new in json dry-run mode", async () => {
@@ -58,6 +61,51 @@ describe("mint cli", () => {
     });
 
     write.mockRestore();
+  });
+
+  it("doctor recognizes a generated app as ready without pointing back to connect", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-doctor-"));
+    const previousCwd = process.cwd();
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    try {
+      await scaffoldMintApp({appRoot: projectRoot, appName: "dream-coach"});
+      const appJsonPath = join(projectRoot, "app.json");
+      const appJson = JSON.parse(await readFile(appJsonPath, "utf8")) as {expo: {extra?: Record<string, unknown>}};
+      appJson.expo.extra = {eas: {projectId: "eas-project-id"}};
+      await writeFile(appJsonPath, `${JSON.stringify(appJson, null, 2)}\n`);
+      await upsertEnvFile(projectRoot, ".env.local", {
+        EXPO_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+        EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable",
+        EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: "appl_test",
+        EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: "goog_test",
+        EXPO_PUBLIC_POSTHOG_KEY: "phc_test",
+      });
+      await markProvider(projectRoot, "supabase", "connected");
+      await markProvider(projectRoot, "revenuecat", "connected");
+      await markProvider(projectRoot, "posthog", "connected");
+      await markProvider(projectRoot, "expo", "connected", {projectId: "eas-project-id"});
+
+      process.chdir(projectRoot);
+
+      await runMintCli(["node", "mint", "doctor", "--json"]);
+
+      const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+      const payload = JSON.parse(output);
+      expect(payload.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({label: "Generated app shell", status: "ok"}),
+          expect.objectContaining({label: "Provider resources", status: "ok"}),
+          expect.objectContaining({label: "Formatting, linting, and tests", status: "ok"}),
+        ]),
+      );
+      expect(payload.nextCommand).toContain("pnpm install");
+      expect(output).not.toContain("mint connect");
+    } finally {
+      process.chdir(previousCwd);
+      write.mockRestore();
+      await rm(projectRoot, {recursive: true, force: true});
+    }
   });
 
   it("runs connect in json mode", async () => {

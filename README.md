@@ -1,6 +1,6 @@
 # Mint
 
-Mint creates and connects opinionated Expo app shells with Supabase, RevenueCat, PostHog, EAS, onboarding, auth, and agent rules.
+Mint creates opinionated Expo app shells with Supabase, RevenueCat, PostHog, EAS, onboarding, auth, a TypeScript backend, quality tooling, and agent rules.
 
 ## Usage
 
@@ -9,7 +9,18 @@ pnpm dlx @usemint/cli@latest new dream-coach
 npx @usemint/cli@latest new dream-coach
 ```
 
-`mint new` is the happy path: it creates the app shell, collects provider access, validates every provider, then applies provider resources together. `mint connect` is for repair, resume, or connecting services later.
+`mint new` is the happy path: it creates the app shell, validates every provider, then creates/configures provider resources together and writes local env/state into the generated app. `mint connect` is only for repair or saving missing credentials.
+
+The generated app includes:
+
+- Expo Router app structure with an extensible onboarding state machine and paywall step.
+- Supabase client env plus server env for auth, database, and storage.
+- RevenueCat project/apps and public SDK keys.
+- PostHog project and client token.
+- EAS project link in `app.json`.
+- Hono TypeScript backend in `server/src`.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test`, Prettier, ESLint, and Vitest.
+- `CLAUDE.md` and `AGENTS.md` rules for future vibecoding agents.
 
 After global install:
 
@@ -54,7 +65,7 @@ Stage Supabase project settings:
 mint connect supabase --create
 ```
 
-This does not create a hosted Supabase project by itself. Mint-owned resources are created only during the all-provider apply phase, after Supabase, RevenueCat, PostHog, Expo, and EAS are configured.
+This repair command does not create a hosted Supabase project by itself. Mint-owned resources are created during the `mint new` all-provider apply phase, after Supabase, RevenueCat, PostHog, Expo, and EAS validate.
 
 Dry-run the exact commands first:
 
