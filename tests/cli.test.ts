@@ -55,4 +55,42 @@ describe("mint cli", () => {
 
     write.mockRestore();
   });
+
+  it("explains that supabase is not connected without a project ref", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "connect", "supabase", "--json"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toMatchObject({
+      command: "connect",
+      service: "supabase",
+      result: {
+        status: "needs_project_ref",
+        connected: false,
+      },
+    });
+
+    write.mockRestore();
+  });
+
+  it("shows the supabase link command in dry-run mode", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "connect", "supabase", "--project-ref", "abc123", "--dry-run", "--json"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toMatchObject({
+      command: "connect",
+      service: "supabase",
+      result: {
+        status: "ready_to_link",
+        connected: false,
+        projectRef: "abc123",
+      },
+    });
+    expect(output).toContain("supabase link --project-ref abc123");
+
+    write.mockRestore();
+  });
 });

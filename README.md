@@ -22,6 +22,22 @@ mint new dream-coach
 pnpm verify
 ```
 
+## Supabase Connect
+
+Inspect what Mint needs:
+
+```bash
+mint connect supabase
+```
+
+Link an existing Supabase project:
+
+```bash
+mint connect supabase --project-ref your-project-ref
+```
+
+Mint runs `supabase link --project-ref <ref>` when the Supabase CLI is available. If it is not available directly, Mint falls back to `npx --yes supabase link --project-ref <ref>`. It writes `.mint/connect-state.json` only after the link command succeeds.
+
 ## Publishing
 
 Mint is published as `@usemint/cli` and exposes a `mint` binary.

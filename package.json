@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/index.ts",
-    "smoke:dist": "node dist/index.js new dream-coach --dry-run --json && node dist/index.js new dream-coach --dry-run --plain && node dist/index.js connect --json && node dist/index.js doctor --json",
+    "smoke:dist": "node dist/index.js new dream-coach --dry-run --json && node dist/index.js new dream-coach --dry-run --plain && node dist/index.js connect --json && node dist/index.js connect supabase --json && node dist/index.js doctor --json",
     "smoke:pack": "node scripts/smoke-packed-cli.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
