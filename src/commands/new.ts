@@ -1,6 +1,8 @@
 import {Command} from "commander";
+import {execaCommandRunner} from "../core/commandRunner.js";
 import {createNewFlowModel} from "../core/flowModel.js";
 import {chooseOutputMode} from "../core/mode.js";
+import {runLocalPreflight} from "../core/preflight.js";
 import {renderJson} from "../output/json.js";
 import {renderText} from "../output/text.js";
 
@@ -18,7 +20,8 @@ export function newCommand(): Command {
     .option("--dry-run", "Show the planned setup without writing files.")
     .option("--plain", "Disable Ink and render plain text.")
     .action(async (appName: string, options: NewOptions) => {
-      const model = createNewFlowModel(appName);
+      const localChecks = options.dryRun ? [] : await runLocalPreflight(execaCommandRunner);
+      const model = createNewFlowModel(appName, localChecks);
       const mode = chooseOutputMode({
         json: options.json,
         interactive: options.plain ? false : undefined,

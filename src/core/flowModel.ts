@@ -9,7 +9,7 @@ export type ProviderCheck = {
   label: string;
   status: CheckStatus;
   detail: string;
-  repairCommand?: string;
+  repairCommand?: string | undefined;
 };
 
 export type SetupStep = {
