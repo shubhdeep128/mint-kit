@@ -1,4 +1,4 @@
-import {useMemo, useState} from "react";
+import {useEffect, useState} from "react";
 import {StatusMessage} from "@inkjs/ui";
 import {Box, Text, useApp, useInput} from "ink";
 import {mintCommand} from "../core/commandDisplay.js";
@@ -11,12 +11,21 @@ type ValidationResult = {
   message: string;
 };
 
+type ApplyResult = {
+  ok: boolean;
+  message: string;
+  details?: string[] | undefined;
+  nextSteps?: string[] | undefined;
+};
+
 type Props = {
   model: MintFlowModel;
   validateProvider?: (provider: ProviderKey) => Promise<ValidationResult>;
+  applySetup?: () => Promise<ApplyResult>;
 };
 
 type ProviderStatus = "waiting" | "checking" | "ready" | "needs_action";
+type SetupPhase = "validating" | "repair" | "applying" | "complete" | "apply_failed";
 
 type SetupProvider = {
   key: ProviderKey;
@@ -93,57 +102,123 @@ function defaultStatusMap(): Record<ProviderKey, ProviderStatus> {
   };
 }
 
-function nextUnfinishedIndex(statuses: Record<ProviderKey, ProviderStatus>, fromIndex: number): number {
-  for (let index = fromIndex + 1; index < setupProviders.length; index += 1) {
-    const status = statuses[setupProviders[index]!.key];
-
-    if (status !== "ready") {
-      return index;
-    }
-  }
-
-  return fromIndex;
-}
-
 function providerProgress(statuses: Record<ProviderKey, ProviderStatus>): string {
   const done = setupProviders.filter(provider => statuses[provider.key] === "ready").length;
   return `${done}/${setupProviders.length}`;
 }
 
-export function MintInteractiveApp({model, validateProvider}: Props) {
+function firstRepairIndex(statuses: Record<ProviderKey, ProviderStatus>): number {
+  return Math.max(
+    0,
+    setupProviders.findIndex(provider => statuses[provider.key] === "needs_action"),
+  );
+}
+
+export function MintInteractiveApp({model, validateProvider, applySetup}: Props) {
   const {exit} = useApp();
   const [activeIndex, setActiveIndex] = useState(0);
+  const [phase, setPhase] = useState<SetupPhase>("validating");
   const [statuses, setStatuses] = useState<Record<ProviderKey, ProviderStatus>>(() => defaultStatusMap());
-  const [message, setMessage] = useState("Run the command for this step, then press Enter to validate.");
+  const [messages, setMessages] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState("Checking provider connections...");
+  const [applyResult, setApplyResult] = useState<ApplyResult | undefined>();
   const activeProvider = setupProviders[activeIndex]!;
-  const allDone = useMemo(
-    () => setupProviders.every(provider => statuses[provider.key] === "ready"),
-    [statuses],
-  );
+
+  async function runApply() {
+    setPhase("applying");
+    setApplyResult(undefined);
+    setMessage("Applying Mint setup...");
+
+    const result = applySetup
+      ? await applySetup()
+      : {
+          ok: true,
+          message: "Provider access validated. Apply automation is not wired in this command yet.",
+          details: ["No provider resources were created."],
+          nextSteps: ["Run mint doctor"],
+        };
+
+    setApplyResult(result);
+    setPhase(result.ok ? "complete" : "apply_failed");
+    setMessage(result.message);
+  }
+
+  async function validateProviders(providers: SetupProvider[]) {
+    setPhase("validating");
+    setMessage("Checking provider connections...");
+    setApplyResult(undefined);
+    setStatuses(current => {
+      const next = {...current};
+      for (const provider of providers) {
+        next[provider.key] = "checking";
+      }
+      return next;
+    });
+
+    const results = await Promise.all(
+      providers.map(async provider => {
+        const result = validateProvider
+          ? await validateProvider(provider.key)
+          : {
+              ok: false,
+              message: `Run ${mintCommand(provider.commandArgs)}, then recheck this provider.`,
+            };
+
+        return {provider, result};
+      }),
+    );
+
+    const resultMessages = Object.fromEntries(results.map(({provider, result}) => [provider.key, result.message]));
+    const nextStatuses = results.reduce(
+      (next, {provider, result}) => ({
+        ...next,
+        [provider.key]: result.ok ? ("ready" as const) : ("needs_action" as const),
+      }),
+      {...statuses},
+    );
+
+    setMessages(current => ({...current, ...resultMessages}));
+    setStatuses(nextStatuses);
+
+    if (setupProviders.every(provider => nextStatuses[provider.key] === "ready")) {
+      await runApply();
+      return;
+    }
+
+    const repairIndex = firstRepairIndex(nextStatuses);
+    setActiveIndex(repairIndex);
+    setPhase("repair");
+    setMessage(resultMessages[setupProviders[repairIndex]!.key] ?? "Some providers need attention.");
+  }
 
   async function validateActiveProvider() {
     if (statuses[activeProvider.key] === "checking") {
       return;
     }
 
-    setStatuses(current => ({...current, [activeProvider.key]: "checking"}));
+    await validateProviders([activeProvider]);
+  }
 
-    const result = validateProvider
-      ? await validateProvider(activeProvider.key)
-      : {
-          ok: false,
-          message: `Run ${mintCommand(activeProvider.commandArgs)}, then press Enter here to validate again.`,
-        };
+  useEffect(() => {
+    void validateProviders(setupProviders);
+    // Run once on mount; retries are explicit via keyboard shortcuts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    setStatuses(current => {
-      const next = {...current, [activeProvider.key]: result.ok ? ("ready" as const) : ("needs_action" as const)};
-      if (result.ok) {
-        setActiveIndex(index => nextUnfinishedIndex(next, index));
-      }
+  function selectRepairProvider(direction: 1 | -1) {
+    const repairProviders = setupProviders
+      .map((provider, index) => ({provider, index}))
+      .filter(item => statuses[item.provider.key] === "needs_action");
 
-      return next;
-    });
-    setMessage(result.message);
+    if (repairProviders.length === 0) {
+      return;
+    }
+
+    const currentRepairIndex = repairProviders.findIndex(item => item.index === activeIndex);
+    const safeIndex = currentRepairIndex === -1 ? 0 : currentRepairIndex;
+    const nextRepair = repairProviders[(safeIndex + direction + repairProviders.length) % repairProviders.length]!;
+    setActiveIndex(nextRepair.index);
+    setMessage(messages[nextRepair.provider.key] ?? `Run ${mintCommand(nextRepair.provider.commandArgs)}, then recheck.`);
   }
 
   useInput((input, key) => {
@@ -152,7 +227,7 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
       return;
     }
 
-    if (allDone) {
+    if (phase === "complete") {
       if (key.return) {
         exit();
       }
@@ -160,37 +235,98 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
       return;
     }
 
-    if (input === "b") {
-      setActiveIndex(index => Math.max(0, index - 1));
-      setMessage("Moved back. Run the command for this step, then press Enter to validate.");
+    if (phase === "applying" || phase === "validating") {
       return;
     }
 
-    if (key.return) {
+    if (phase === "apply_failed") {
+      if (input === "r" || key.return) {
+        void runApply();
+        return;
+      }
+
+      if (input === "b") {
+        void validateProviders(setupProviders);
+        return;
+      }
+    }
+
+    if (input === "r") {
+      void validateProviders(setupProviders);
+      return;
+    }
+
+    if (key.upArrow || input === "b") {
+      selectRepairProvider(-1);
+      return;
+    }
+
+    if (key.downArrow) {
+      selectRepairProvider(1);
+      return;
+    }
+
+    if (phase === "repair" && key.return) {
       void validateActiveProvider();
     }
   });
 
+  const statusVariant = phase === "complete" ? "success" : phase === "repair" || phase === "apply_failed" ? "warning" : "info";
+  const statusMessage =
+    phase === "validating"
+      ? "Auto-checking provider connections..."
+      : phase === "repair"
+        ? "Some provider access needs attention."
+        : phase === "applying"
+          ? "All providers validated. Applying Mint setup now..."
+          : phase === "apply_failed"
+            ? "Apply needs attention."
+            : "Mint setup complete.";
+
   return (
     <Frame title={model.title} subtitle={model.subtitle}>
       <Box flexDirection="column" gap={1}>
-        <StatusMessage variant={allDone ? "success" : "info"}>
-          {allDone
-            ? "Provider setup complete."
-            : "Setup is waiting for you. No provider resources have been created."}
-        </StatusMessage>
+        <StatusMessage variant={statusVariant}>{statusMessage}</StatusMessage>
 
-        {allDone ? (
+        {phase === "complete" ? (
           <Box flexDirection="column">
-            <Text bold>Ready for apply</Text>
-            <Text>Mint validated Supabase, RevenueCat, PostHog, and Expo/EAS.</Text>
-            <Text color={theme.muted}>No provider resources were created while collecting access.</Text>
+            <Text bold>Done</Text>
+            <Text>{applyResult?.message ?? "Mint setup finished."}</Text>
+            {(applyResult?.details ?? []).map(detail => (
+              <Text key={detail} color={theme.muted}>
+                {detail}
+              </Text>
+            ))}
+            {(applyResult?.nextSteps ?? []).length > 0 ? <Text bold>Next</Text> : null}
+            {(applyResult?.nextSteps ?? []).map(step => (
+              <Text key={step}>- {step}</Text>
+            ))}
           </Box>
-        ) : (
+        ) : phase === "applying" ? (
+          <Box flexDirection="column">
+            <Text bold>Apply</Text>
+            <Text>{message}</Text>
+            <Text color={theme.muted}>Mint is creating/configuring resources. Do not close this terminal.</Text>
+          </Box>
+        ) : phase === "apply_failed" ? (
+          <Box flexDirection="column">
+            <Text bold>Apply failed</Text>
+            <Text>{applyResult?.message ?? message}</Text>
+            {(applyResult?.details ?? []).map(detail => (
+              <Text key={detail} color={theme.muted}>
+                {detail}
+              </Text>
+            ))}
+            {(applyResult?.nextSteps ?? []).length > 0 ? <Text bold>Next</Text> : null}
+            {(applyResult?.nextSteps ?? []).map(step => (
+              <Text key={step}>- {step}</Text>
+            ))}
+          </Box>
+        ) : phase === "repair" ? (
           <>
             <Box flexDirection="column">
               <Text bold>
-                Step {activeIndex + 1} of {setupProviders.length}: {activeProvider.label}
+                Repair {activeProvider.label}
               </Text>
               <Text>
                 Need: <Text color={theme.muted}>{activeProvider.need}</Text>
@@ -203,10 +339,16 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
             </Box>
 
             <Box flexDirection="column">
-              <Text bold>Validate</Text>
+              <Text bold>Recheck</Text>
               <Text>{message}</Text>
             </Box>
           </>
+        ) : (
+          <Box flexDirection="column">
+            <Text bold>Validate</Text>
+            <Text>{message}</Text>
+            <Text color={theme.muted}>Mint is checking every provider automatically.</Text>
+          </Box>
         )}
 
         <Box flexDirection="column">
@@ -225,7 +367,15 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
           })}
         </Box>
 
-        <Text color={theme.muted}>{allDone ? "Keys: Enter finish, q quit" : "Keys: Enter validate, b back, q quit"}</Text>
+        <Text color={theme.muted}>
+          {phase === "complete"
+            ? "Keys: Enter finish, q quit"
+            : phase === "repair"
+              ? "Keys: Enter recheck selected, r recheck all, up/down switch, q quit"
+              : phase === "apply_failed"
+                ? "Keys: Enter retry apply, r retry apply, b provider checks, q quit"
+                : "Keys: q quit"}
+        </Text>
       </Box>
     </Frame>
   );

@@ -2,13 +2,16 @@ import {createElement} from "react";
 import {Command} from "commander";
 import {mintCommand} from "../core/commandDisplay.js";
 import {execaCommandRunner} from "../core/commandRunner.js";
+import {readEnvFileValues} from "../core/envFile.js";
 import {createNewFlowModel, type ProviderKey} from "../core/flowModel.js";
 import {chooseOutputMode} from "../core/mode.js";
 import {runLocalPreflight} from "../core/preflight.js";
 import {getCredentialProviderSpec, inspectCredentialProvider} from "../core/providerCredentials.js";
+import {provisionSupabaseProject} from "../core/supabaseProvision.js";
 import {inspectSupabaseConnection} from "../core/supabaseConnect.js";
 import {renderJson} from "../output/json.js";
 import {renderText} from "../output/text.js";
+import {markProvider, readConnectState} from "../state/connectState.js";
 import {MintInteractiveApp} from "../ui/MintInteractiveApp.js";
 import {renderInteractive} from "../ui/renderInteractive.js";
 
@@ -64,6 +67,58 @@ async function validateSetupProvider(provider: ProviderKey) {
   };
 }
 
+async function applySetup(appName: string, options: NewOptions) {
+  const projectRoot = process.cwd();
+  const state = await readConnectState(projectRoot);
+  const envValues = await readEnvFileValues(projectRoot, ".env.local");
+  const supabaseAlreadyApplied =
+    state.providers.some(provider => provider.key === "supabase" && provider.status === "connected") &&
+    Boolean(envValues.EXPO_PUBLIC_SUPABASE_URL);
+
+  if (supabaseAlreadyApplied) {
+    return {
+      ok: true,
+      message: "Mint setup is already applied for this workspace.",
+      details: ["Supabase env is present and connect-state marks Supabase connected."],
+      nextSteps: ["Run mint doctor"],
+    };
+  }
+
+  const result = await provisionSupabaseProject({
+    projectRoot,
+    runner: execaCommandRunner,
+    projectName: appName,
+    serverEnvFile: "server/.env",
+    apply: true,
+    allProvidersConfigured: true,
+    dryRun: options.dryRun,
+  });
+
+  if (result.connected) {
+    await markProvider(projectRoot, "supabase", "connected", {
+      projectRef: result.project?.ref,
+      envFile: result.env.expo?.path,
+      serverEnvFile: result.env.server?.path,
+    });
+  }
+
+  const ok = result.connected || result.status === "ready_to_create";
+
+  return {
+    ok,
+    message: result.message,
+    details: [
+      result.project ? `Supabase project: ${result.project.name ?? appName} (${result.project.ref})` : undefined,
+      result.organization ? `Supabase organization: ${result.organization.name}` : undefined,
+      result.env.expo ? `Expo env: ${result.env.expo.path}` : undefined,
+      result.env.server ? `Server env: ${result.env.server.path}` : undefined,
+      ...result.warnings,
+      result.error ? `Error: ${result.error}` : undefined,
+    ].filter((detail): detail is string => Boolean(detail)),
+    nextSteps: result.connected ? ["Run mint doctor"] : result.nextSteps,
+  };
+}
+
 export function newCommand(): Command {
   return new Command("new")
     .description("Create a new Mint app shell.")
@@ -88,7 +143,13 @@ export function newCommand(): Command {
       }
 
       if (mode === "interactive") {
-        await renderInteractive(createElement(MintInteractiveApp, {model, validateProvider: validateSetupProvider}));
+        await renderInteractive(
+          createElement(MintInteractiveApp, {
+            model,
+            validateProvider: validateSetupProvider,
+            applySetup: () => applySetup(appName, options),
+          }),
+        );
         return;
       }
 
