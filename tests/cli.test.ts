@@ -27,4 +27,32 @@ describe("mint cli", () => {
 
     write.mockRestore();
   });
+
+  it("runs doctor in json mode", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "doctor", "--json"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toMatchObject({
+      command: "doctor",
+      title: "Doctor",
+    });
+
+    write.mockRestore();
+  });
+
+  it("runs connect in json mode", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "connect", "--json"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toMatchObject({
+      command: "connect",
+      service: "all",
+    });
+
+    write.mockRestore();
+  });
 });
