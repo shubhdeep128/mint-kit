@@ -21,3 +21,25 @@ mint new dream-coach
 ```bash
 pnpm verify
 ```
+
+## Publishing
+
+Mint is published as `@usemint/cli` and exposes a `mint` binary.
+
+Before publishing:
+
+```bash
+pnpm verify
+npm login
+npm whoami
+npm publish --access public
+```
+
+Consumers run it without installing:
+
+```bash
+pnpm dlx @usemint/cli@latest new dream-coach
+npx @usemint/cli@latest new dream-coach
+```
+
+The unscoped package names `mint` and `create-mint-app` are not used by this project.

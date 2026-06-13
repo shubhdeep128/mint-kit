@@ -30,7 +30,7 @@ execFileSync("pnpm", ["dlx", tarballPath, "new", "package-smoke", "--dry-run", "
   stdio: "inherit",
 });
 
-execFileSync("npx", ["--yes", tarballPath, "new", "package-smoke", "--dry-run", "--plain"], {
+execFileSync("npx", ["--yes", "--package", tarballPath, "mint", "new", "package-smoke", "--dry-run", "--plain"], {
   cwd: root,
   env: {...process.env, MINT_TEST_MODE: "1", CI: "1"},
   stdio: "inherit",
