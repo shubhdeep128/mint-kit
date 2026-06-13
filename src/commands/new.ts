@@ -1,4 +1,14 @@
 import {Command} from "commander";
+import {createNewFlowModel} from "../core/flowModel.js";
+import {chooseOutputMode} from "../core/mode.js";
+import {renderJson} from "../output/json.js";
+import {renderText} from "../output/text.js";
+
+type NewOptions = {
+  json?: boolean;
+  dryRun?: boolean;
+  plain?: boolean;
+};
 
 export function newCommand(): Command {
   return new Command("new")
@@ -7,19 +17,20 @@ export function newCommand(): Command {
     .option("--json", "Render machine-readable output.")
     .option("--dry-run", "Show the planned setup without writing files.")
     .option("--plain", "Disable Ink and render plain text.")
-    .action(async (appName: string, options: {json?: boolean; dryRun?: boolean}) => {
-      const payload = {
-        command: "new",
-        appName,
-        dryRun: Boolean(options.dryRun),
-        message: `Mint will create ${appName}.`,
-      };
+    .action(async (appName: string, options: NewOptions) => {
+      const model = createNewFlowModel(appName);
+      const mode = chooseOutputMode({
+        json: options.json,
+        interactive: options.plain ? false : undefined,
+        stdoutIsTty: process.stdout.isTTY,
+        ci: process.env.CI,
+      });
 
-      if (options.json) {
-        process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+      if (mode === "json") {
+        process.stdout.write(renderJson(model));
         return;
       }
 
-      process.stdout.write(`${payload.message}\n`);
+      process.stdout.write(renderText(model));
     });
 }

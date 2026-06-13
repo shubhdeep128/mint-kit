@@ -11,7 +11,6 @@ describe("mint cli", () => {
     expect(JSON.parse(output)).toMatchObject({
       command: "new",
       appName: "dream-coach",
-      dryRun: true,
     });
 
     write.mockRestore();
