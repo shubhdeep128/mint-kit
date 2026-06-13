@@ -1,3 +1,4 @@
+import {createElement} from "react";
 import {Command} from "commander";
 import {execaCommandRunner} from "../core/commandRunner.js";
 import {createNewFlowModel} from "../core/flowModel.js";
@@ -5,6 +6,8 @@ import {chooseOutputMode} from "../core/mode.js";
 import {runLocalPreflight} from "../core/preflight.js";
 import {renderJson} from "../output/json.js";
 import {renderText} from "../output/text.js";
+import {MintInteractiveApp} from "../ui/MintInteractiveApp.js";
+import {renderInteractive} from "../ui/renderInteractive.js";
 
 type NewOptions = {
   json?: boolean;
@@ -31,6 +34,11 @@ export function newCommand(): Command {
 
       if (mode === "json") {
         process.stdout.write(renderJson(model));
+        return;
+      }
+
+      if (mode === "interactive") {
+        await renderInteractive(createElement(MintInteractiveApp, {model}));
         return;
       }
 

@@ -15,4 +15,16 @@ describe("mint cli", () => {
 
     write.mockRestore();
   });
+
+  it("runs new in plain text dry-run mode", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "new", "dream-coach", "--dry-run", "--plain"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("Mint");
+    expect(output).toContain("dream-coach");
+
+    write.mockRestore();
+  });
 });
