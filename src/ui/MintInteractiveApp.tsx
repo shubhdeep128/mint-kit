@@ -152,6 +152,14 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
       return;
     }
 
+    if (allDone) {
+      if (key.return) {
+        exit();
+      }
+
+      return;
+    }
+
     if (input === "b") {
       setActiveIndex(index => Math.max(0, index - 1));
       setMessage("Moved back. Run the command for this step, then press Enter to validate.");
@@ -168,28 +176,38 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
       <Box flexDirection="column" gap={1}>
         <StatusMessage variant={allDone ? "success" : "info"}>
           {allDone
-            ? "All provider access is ready. Mint can apply resources together next."
+            ? "Provider setup complete."
             : "Setup is waiting for you. No provider resources have been created."}
         </StatusMessage>
 
-        <Box flexDirection="column">
-          <Text bold>
-            Step {activeIndex + 1} of {setupProviders.length}: {activeProvider.label}
-          </Text>
-          <Text>
-            Need: <Text color={theme.muted}>{activeProvider.need}</Text>
-          </Text>
-          <Text>Run this command:</Text>
-          <Box paddingLeft={2}>
-            <Text color={theme.accent}>{mintCommand(activeProvider.commandArgs)}</Text>
+        {allDone ? (
+          <Box flexDirection="column">
+            <Text bold>Ready for apply</Text>
+            <Text>Mint validated Supabase, RevenueCat, PostHog, and Expo/EAS.</Text>
+            <Text color={theme.muted}>No provider resources were created while collecting access.</Text>
           </Box>
-          <Text color={theme.muted}>{activeProvider.validate}</Text>
-        </Box>
+        ) : (
+          <>
+            <Box flexDirection="column">
+              <Text bold>
+                Step {activeIndex + 1} of {setupProviders.length}: {activeProvider.label}
+              </Text>
+              <Text>
+                Need: <Text color={theme.muted}>{activeProvider.need}</Text>
+              </Text>
+              <Text>Run this command:</Text>
+              <Box paddingLeft={2}>
+                <Text color={theme.accent}>{mintCommand(activeProvider.commandArgs)}</Text>
+              </Box>
+              <Text color={theme.muted}>{activeProvider.validate}</Text>
+            </Box>
 
-        <Box flexDirection="column">
-          <Text bold>Validate</Text>
-          <Text>{message}</Text>
-        </Box>
+            <Box flexDirection="column">
+              <Text bold>Validate</Text>
+              <Text>{message}</Text>
+            </Box>
+          </>
+        )}
 
         <Box flexDirection="column">
           <Text bold>Providers ({providerProgress(statuses)} ready)</Text>
@@ -207,7 +225,7 @@ export function MintInteractiveApp({model, validateProvider}: Props) {
           })}
         </Box>
 
-        <Text color={theme.muted}>Keys: Enter validate, b back, q quit</Text>
+        <Text color={theme.muted}>{allDone ? "Keys: Enter finish, q quit" : "Keys: Enter validate, b back, q quit"}</Text>
       </Box>
     </Frame>
   );
