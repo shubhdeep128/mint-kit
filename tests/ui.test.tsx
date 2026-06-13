@@ -12,6 +12,9 @@ describe("MintInteractiveApp", () => {
     expect(lastFrame()).toContain("Supabase");
     expect(lastFrame()).toContain("Validate every provider");
     expect(lastFrame()).toContain("Apply resources together");
+    expect(lastFrame()).toContain("No background job is running");
+    expect(lastFrame()).toContain("Start guided setup");
+    expect(lastFrame()).toContain("Keys");
     expect(lastFrame()).not.toContain("mint connect");
   });
 });
