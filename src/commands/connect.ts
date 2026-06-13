@@ -11,6 +11,12 @@ import {
   type CredentialProviderSpec,
 } from "../core/providerCredentials.js";
 import {providerCatalog} from "../core/providerCatalog.js";
+import {
+  validateEasAccess,
+  validatePostHogAccess,
+  validateRevenueCatAccess,
+  type ProviderAccessValidation,
+} from "../core/providerProvision.js";
 import {provisionSupabaseProject, type SupabaseProvisionResult} from "../core/supabaseProvision.js";
 import {
   buildSupabaseInvocation,
@@ -259,6 +265,62 @@ function renderCredentialConnectText(result: CredentialConnectResult, spec: Cred
   return `${lines.join("\n")}\n`;
 }
 
+async function validateCredentialProvider(
+  projectRoot: string,
+  spec: CredentialProviderSpec,
+  envFile: string,
+  credentialOverrides?: Record<string, string | undefined> | undefined,
+): Promise<ProviderAccessValidation | undefined> {
+  if (spec.key === "revenuecat") {
+    return validateRevenueCatAccess({credentialsRoot: projectRoot, envFile, credentialOverrides});
+  }
+
+  if (spec.key === "posthog") {
+    return validatePostHogAccess({credentialsRoot: projectRoot, envFile, credentialOverrides});
+  }
+
+  if (spec.key === "expo" || spec.key === "eas") {
+    return validateEasAccess({credentialsRoot: projectRoot, envFile, credentialOverrides, runner: execaCommandRunner});
+  }
+
+  return undefined;
+}
+
+async function withCredentialValidation(
+  projectRoot: string,
+  spec: CredentialProviderSpec,
+  envFile: string,
+  result: CredentialConnectResult,
+  credentialOverrides?: Record<string, string | undefined> | undefined,
+): Promise<CredentialConnectResult> {
+  const validation = await validateCredentialProvider(projectRoot, spec, envFile, credentialOverrides);
+
+  if (!validation || validation.ok) {
+    return {
+      ...result,
+      message: validation?.message ?? result.message,
+      nextSteps: validation?.nextSteps.length ? validation.nextSteps : result.nextSteps,
+    };
+  }
+
+  const state = await markProvider(projectRoot, spec.stateKey, "missing", {
+    envFile: result.env?.path ?? envFile,
+    variables: result.variables,
+    validationError: validation.message,
+  });
+
+  return {
+    ...result,
+    status: "needs_input",
+    connected: false,
+    message: `${spec.label} credential was saved, but validation failed: ${validation.message}`,
+    state,
+    statePath: connectStatePath(projectRoot),
+    missing: result.variables,
+    nextSteps: validation.nextSteps,
+  };
+}
+
 async function runSupabaseLogin(options: ConnectOptions) {
   const cli = await detectSupabaseCli(execaCommandRunner);
   const args = ["login", ...(options.browser === false ? ["--no-browser"] : [])];
@@ -485,7 +547,8 @@ export function connectCommand(): Command {
         const suppliedValues = credentialValuesFromOptions(credentialSpec, options);
 
         if (hasAllCredentialValues(credentialSpec, suppliedValues)) {
-          const result = await connectCredentialProvider(projectRoot, credentialSpec, suppliedValues, envFile);
+          const rawResult = await connectCredentialProvider(projectRoot, credentialSpec, suppliedValues, envFile);
+          const result = await withCredentialValidation(projectRoot, credentialSpec, envFile, rawResult, suppliedValues);
           const payload = {
             command: "connect",
             service: credentialSpec.key,
@@ -503,7 +566,10 @@ export function connectCommand(): Command {
         }
 
         const inspection = await inspectCredentialProvider(projectRoot, credentialSpec, envFile);
-        const inspectedResult = resultFromCredentialInspection(credentialSpec, inspection, envFile);
+        const rawInspectedResult = resultFromCredentialInspection(credentialSpec, inspection, envFile);
+        const inspectedResult = inspection.connected
+          ? await withCredentialValidation(projectRoot, credentialSpec, envFile, rawInspectedResult)
+          : rawInspectedResult;
 
         if (inspection.connected || options.json || !process.stdout.isTTY) {
           const payload = {
@@ -526,7 +592,10 @@ export function connectCommand(): Command {
           createElement(CredentialConnectApp, {
             spec: credentialSpec,
             envFile,
-            onSubmit: values => connectCredentialProvider(projectRoot, credentialSpec, values, envFile),
+            onSubmit: async values => {
+              const rawResult = await connectCredentialProvider(projectRoot, credentialSpec, values, envFile);
+              return withCredentialValidation(projectRoot, credentialSpec, envFile, rawResult, values);
+            },
           }),
         );
         return;

@@ -19,12 +19,59 @@ describe("provider provisioning", () => {
     }) as typeof fetch;
 
     try {
-      await writeFile(join(credentialsRoot, ".env.local"), "REVENUECAT_API_KEY=rc_secret_test\n");
+      await writeFile(join(credentialsRoot, ".env.local"), "REVENUECAT_API_KEY=sk_test\n");
 
       const result = await validateRevenueCatAccess({credentialsRoot, fetchFn});
 
       expect(result.ok).toBe(true);
       expect(calls).toEqual(["https://api.revenuecat.com/v2/projects?limit=1"]);
+    } finally {
+      await rm(credentialsRoot, {recursive: true, force: true});
+    }
+  });
+
+  it("rejects RevenueCat public SDK keys before apply", async () => {
+    const credentialsRoot = await mkdtemp(join(tmpdir(), "mint-credentials-"));
+    const calls: string[] = [];
+    const fetchFn = (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return jsonResponse({items: []});
+    }) as typeof fetch;
+
+    try {
+      await writeFile(join(credentialsRoot, ".env.local"), "REVENUECAT_API_KEY=appl_public_test\n");
+
+      const result = await validateRevenueCatAccess({credentialsRoot, fetchFn});
+
+      expect(result).toMatchObject({
+        ok: false,
+        message: "RevenueCat SDK public key cannot manage projects.",
+      });
+      expect(calls).toEqual([]);
+    } finally {
+      await rm(credentialsRoot, {recursive: true, force: true});
+    }
+  });
+
+  it("surfaces RevenueCat 401 as an invalid management credential", async () => {
+    const credentialsRoot = await mkdtemp(join(tmpdir(), "mint-credentials-"));
+    const fetchFn = (async () =>
+      jsonResponse(
+        {
+          message: "Invalid API key.",
+          type: "authentication_error",
+        },
+        401,
+      )) as typeof fetch;
+
+    try {
+      await writeFile(join(credentialsRoot, ".env.local"), "REVENUECAT_API_KEY=sk_invalid\n");
+
+      const result = await validateRevenueCatAccess({credentialsRoot, fetchFn});
+
+      expect(result.ok).toBe(false);
+      expect(result.details.join("\n")).toContain("RevenueCat rejected this credential as invalid");
+      expect(result.nextSteps.join("\n")).toContain("mint connect revenuecat --api-key <sk_...>");
     } finally {
       await rm(credentialsRoot, {recursive: true, force: true});
     }
@@ -64,7 +111,7 @@ describe("provider provisioning", () => {
     }) as typeof fetch;
 
     try {
-      await writeFile(join(root, ".env.local"), "REVENUECAT_API_KEY=rc_secret_test\n");
+      await writeFile(join(root, ".env.local"), "REVENUECAT_API_KEY=sk_test\n");
 
       const result = await provisionRevenueCat({
         appRoot,

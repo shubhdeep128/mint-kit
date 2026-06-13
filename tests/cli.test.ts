@@ -160,12 +160,15 @@ describe("mint cli", () => {
   it("saves RevenueCat credentials without echoing the secret", async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), "mint-cli-"));
     const previousCwd = process.cwd();
+    const previousKey = process.env.REVENUECAT_API_KEY;
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({items: []}), {status: 200}));
 
     try {
       process.chdir(projectRoot);
+      delete process.env.REVENUECAT_API_KEY;
 
-      await runMintCli(["node", "mint", "connect", "revenuecat", "--api-key", "rc_secret_test", "--json"]);
+      await runMintCli(["node", "mint", "connect", "revenuecat", "--api-key", "sk_test", "--json"]);
 
       const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(JSON.parse(output)).toMatchObject({
@@ -177,11 +180,71 @@ describe("mint cli", () => {
           variables: ["REVENUECAT_API_KEY"],
         },
       });
-      expect(output).not.toContain("rc_secret_test");
-      await expect(readFile(join(projectRoot, ".env.local"), "utf8")).resolves.toContain("REVENUECAT_API_KEY=rc_secret_test");
-      await expect(readFile(join(projectRoot, ".mint/connect-state.json"), "utf8")).resolves.not.toContain("rc_secret_test");
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.revenuecat.com/v2/projects?limit=1",
+        expect.objectContaining({method: "GET"}),
+      );
+      expect(output).not.toContain("sk_test");
+      await expect(readFile(join(projectRoot, ".env.local"), "utf8")).resolves.toContain("REVENUECAT_API_KEY=sk_test");
+      await expect(readFile(join(projectRoot, ".mint/connect-state.json"), "utf8")).resolves.not.toContain("sk_test");
     } finally {
       process.chdir(previousCwd);
+      if (previousKey) {
+        process.env.REVENUECAT_API_KEY = previousKey;
+      } else {
+        delete process.env.REVENUECAT_API_KEY;
+      }
+      fetchSpy.mockRestore();
+      write.mockRestore();
+      await rm(projectRoot, {recursive: true, force: true});
+    }
+  });
+
+  it("does not mark RevenueCat connected for a public SDK key", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-cli-"));
+    const previousCwd = process.cwd();
+    const previousKey = process.env.REVENUECAT_API_KEY;
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({items: []}), {status: 200}));
+
+    try {
+      process.chdir(projectRoot);
+      delete process.env.REVENUECAT_API_KEY;
+
+      await runMintCli(["node", "mint", "connect", "revenuecat", "--api-key", "appl_public_test", "--json"]);
+
+      const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(JSON.parse(output)).toMatchObject({
+        command: "connect",
+        service: "revenuecat",
+        result: {
+          status: "needs_input",
+          connected: false,
+          missing: ["REVENUECAT_API_KEY"],
+        },
+        state: {
+          providers: [
+            expect.objectContaining({
+              key: "revenuecat",
+              status: "missing",
+            }),
+          ],
+        },
+      });
+      expect(output).toContain("SDK public key cannot manage projects");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      await expect(readFile(join(projectRoot, ".env.local"), "utf8")).resolves.toContain(
+        "REVENUECAT_API_KEY=appl_public_test",
+      );
+      await expect(readFile(join(projectRoot, ".mint/connect-state.json"), "utf8")).resolves.not.toContain("appl_public_test");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousKey) {
+        process.env.REVENUECAT_API_KEY = previousKey;
+      } else {
+        delete process.env.REVENUECAT_API_KEY;
+      }
+      fetchSpy.mockRestore();
       write.mockRestore();
       await rm(projectRoot, {recursive: true, force: true});
     }

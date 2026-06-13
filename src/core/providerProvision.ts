@@ -48,6 +48,8 @@ type ProvisionInput = {
 
 type ValidationInput = {
   credentialsRoot: string;
+  envFile?: string | undefined;
+  credentialOverrides?: Record<string, string | undefined> | undefined;
   onProgress?: ((progress: ProviderProvisionProgress) => void) | undefined;
 };
 
@@ -96,14 +98,24 @@ function cleanHost(host: string): string {
   return host.replace(/\/$/, "");
 }
 
-async function readCredential(root: string, name: string): Promise<string | undefined> {
-  const envValues = await readEnvFileValues(root, ".env.local");
-  return process.env[name] || envValues[name] || undefined;
+async function readCredential(
+  root: string,
+  name: string,
+  envFile = ".env.local",
+  overrides?: Record<string, string | undefined> | undefined,
+): Promise<string | undefined> {
+  const envValues = await readEnvFileValues(root, envFile);
+  return overrides?.[name] || process.env[name] || envValues[name] || undefined;
 }
 
-async function readOptionalCredential(root: string, names: string[]): Promise<string | undefined> {
+async function readOptionalCredential(
+  root: string,
+  names: string[],
+  envFile = ".env.local",
+  overrides?: Record<string, string | undefined> | undefined,
+): Promise<string | undefined> {
   for (const name of names) {
-    const value = await readCredential(root, name);
+    const value = await readCredential(root, name, envFile, overrides);
     if (value) {
       return value;
     }
@@ -145,6 +157,57 @@ function authHeaders(apiKey: string, contentType = false): Record<string, string
   return {
     Authorization: `Bearer ${apiKey}`,
     ...(contentType ? {"Content-Type": "application/json"} : {}),
+  };
+}
+
+function revenueCatCredentialKind(apiKey: string): "secret" | "oauth" | "public" | "unknown" {
+  if (apiKey.startsWith("sk_")) {
+    return "secret";
+  }
+
+  if (apiKey.startsWith("atk_")) {
+    return "oauth";
+  }
+
+  if (/^(appl|goog|amzn|rcb|rcb_sb|stripe)_/.test(apiKey)) {
+    return "public";
+  }
+
+  return "unknown";
+}
+
+function revenueCatAuthFailureDetails(status: number, text: string): {details: string[]; nextSteps: string[]} {
+  if (status === 401) {
+    return {
+      details: [
+        "RevenueCat rejected this credential as invalid for REST API v2.",
+        "Mint needs a RevenueCat API v2 secret key (`sk_...`) or OAuth token (`atk_...`), not an SDK public key.",
+        text,
+      ].filter(Boolean),
+      nextSteps: [
+        "Create a RevenueCat API v2 secret key with project configuration read/write permissions.",
+        "Run mint connect revenuecat --api-key <sk_...>",
+      ],
+    };
+  }
+
+  if (status === 403) {
+    return {
+      details: [
+        "RevenueCat accepted the credential, but it does not have the required project configuration permission.",
+        "Project creation requires project_configuration:projects:read_write.",
+        text,
+      ].filter(Boolean),
+      nextSteps: [
+        "Create or update a RevenueCat API v2 secret key with project_configuration:projects:read_write.",
+        "Run mint connect revenuecat --api-key <sk_...>",
+      ],
+    };
+  }
+
+  return {
+    details: [`HTTP ${status}`, text].filter(Boolean),
+    nextSteps: ["Use a RevenueCat API v2 secret key with project configuration permissions."],
   };
 }
 
@@ -248,7 +311,12 @@ async function removeLocalEasProjectId(appRoot: string): Promise<boolean> {
 async function validateRevenueCatApiKey(
   input: ValidationInput & {fetchFn?: typeof fetch | undefined},
 ): Promise<ProviderAccessValidation> {
-  const apiKey = await readCredential(input.credentialsRoot, "REVENUECAT_API_KEY");
+  const apiKey = await readCredential(
+    input.credentialsRoot,
+    "REVENUECAT_API_KEY",
+    input.envFile,
+    input.credentialOverrides,
+  );
   const fetchFn = input.fetchFn ?? fetch;
 
   if (!apiKey) {
@@ -260,6 +328,31 @@ async function validateRevenueCatApiKey(
     };
   }
 
+  const kind = revenueCatCredentialKind(apiKey);
+
+  if (kind === "public") {
+    return {
+      ok: false,
+      message: "RevenueCat SDK public key cannot manage projects.",
+      details: [
+        "The value looks like a public SDK key. Mint needs a RevenueCat API v2 secret key (`sk_...`) or OAuth token (`atk_...`).",
+      ],
+      nextSteps: ["Create a RevenueCat API v2 secret key", "Run mint connect revenuecat --api-key <sk_...>"],
+    };
+  }
+
+  if (kind === "unknown") {
+    return {
+      ok: false,
+      message: "RevenueCat credential format is not recognized.",
+      details: [
+        "RevenueCat API v2 secret keys start with `sk_`; RevenueCat OAuth access tokens start with `atk_`.",
+        "Mint will not start provider apply with an unknown RevenueCat credential shape.",
+      ],
+      nextSteps: ["Create a RevenueCat API v2 secret key", "Run mint connect revenuecat --api-key <sk_...>"],
+    };
+  }
+
   reportProgress(input, "RevenueCat: Validating API key", "GET /v2/projects?limit=1");
   const result = await httpJson(fetchFn, "https://api.revenuecat.com/v2/projects?limit=1", {
     method: "GET",
@@ -267,18 +360,22 @@ async function validateRevenueCatApiKey(
   });
 
   if (!result.ok) {
+    const failure = revenueCatAuthFailureDetails(result.status, result.text);
     return {
       ok: false,
       message: "RevenueCat API key did not validate.",
-      details: [`HTTP ${result.status}`, result.text].filter(Boolean),
-      nextSteps: ["Use a RevenueCat v2 secret key with project configuration permissions."],
+      details: failure.details,
+      nextSteps: failure.nextSteps,
     };
   }
 
   return {
     ok: true,
-    message: "RevenueCat API key validated.",
-    details: ["RevenueCat project API is reachable."],
+    message: "RevenueCat API v2 credential validated.",
+    details: [
+      "RevenueCat project API is reachable.",
+      "Mint will use project_configuration:projects:read_write during apply.",
+    ],
     nextSteps: [],
   };
 }
@@ -292,8 +389,21 @@ export async function validateRevenueCatAccess(
 export async function validatePostHogAccess(
   input: ValidationInput & {fetchFn?: typeof fetch | undefined},
 ): Promise<ProviderAccessValidation> {
-  const apiKey = await readCredential(input.credentialsRoot, "POSTHOG_PERSONAL_API_KEY");
-  const host = cleanHost((await readOptionalCredential(input.credentialsRoot, ["POSTHOG_HOST", "POSTHOG_API_HOST"])) ?? "https://us.posthog.com");
+  const apiKey = await readCredential(
+    input.credentialsRoot,
+    "POSTHOG_PERSONAL_API_KEY",
+    input.envFile,
+    input.credentialOverrides,
+  );
+  const host = cleanHost(
+    (await readOptionalCredential(
+      input.credentialsRoot,
+      ["POSTHOG_HOST", "POSTHOG_API_HOST"],
+      input.envFile,
+      input.credentialOverrides,
+    )) ??
+      "https://us.posthog.com",
+  );
   const fetchFn = input.fetchFn ?? fetch;
 
   if (!apiKey) {
@@ -355,7 +465,7 @@ export async function validatePostHogAccess(
 }
 
 export async function validateEasAccess(input: EasValidationInput): Promise<ProviderAccessValidation> {
-  const expoToken = await readCredential(input.credentialsRoot, "EXPO_TOKEN");
+  const expoToken = await readCredential(input.credentialsRoot, "EXPO_TOKEN", input.envFile, input.credentialOverrides);
 
   if (!expoToken) {
     return {
@@ -534,12 +644,13 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
   });
 
   if (!project.ok) {
+    const failure = revenueCatAuthFailureDetails(project.status, project.text);
     return {
       provider: "revenuecat",
       connected: false,
       message: "RevenueCat project creation failed.",
-      details: [`HTTP ${project.status}`, project.text].filter(Boolean),
-      nextSteps: ["Check RevenueCat API key permissions for project configuration write access."],
+      details: failure.details,
+      nextSteps: failure.nextSteps,
     };
   }
 
@@ -616,7 +727,7 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
       message: "RevenueCat project, apps, and SDK keys configured.",
       details: [`Project: ${projectId}`, `iOS app: ${ios.appId}`, `Android app: ${android.appId}`],
       nextSteps: [],
-    rollback: createRevenueCatRollback({apiKey: revenueCatApiKey, projectId, ios, android, fetchFn}),
+      rollback: createRevenueCatRollback({apiKey: revenueCatApiKey, projectId, ios, android, fetchFn}),
     };
   } catch (error) {
     const rollback = createRevenueCatRollback({apiKey: revenueCatApiKey, projectId, ios, android, fetchFn});
