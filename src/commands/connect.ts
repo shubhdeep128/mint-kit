@@ -1,12 +1,14 @@
 import {Command} from "commander";
-import {execaCommandRunner} from "../core/commandRunner.js";
+import {execaCommandRunner, execaInteractiveCommandRunner} from "../core/commandRunner.js";
 import {providerCatalog} from "../core/providerCatalog.js";
 import {provisionSupabaseProject, type SupabaseProvisionResult} from "../core/supabaseProvision.js";
 import {
   buildSupabaseInvocation,
   connectSupabase,
   detectSupabaseCli,
+  inspectSupabaseConnection,
   type SupabaseConnectResult,
+  type SupabaseDiagnosticsResult,
 } from "../core/supabaseConnect.js";
 import {connectStatePath, markProvider, readConnectState} from "../state/connectState.js";
 
@@ -44,6 +46,45 @@ function renderSupabaseText(result: SupabaseConnectResult, statePath?: string): 
 
   if (result.error) {
     lines.push("", `Error: ${result.error}`);
+  }
+
+  lines.push("", "Next steps:");
+  for (const step of result.nextSteps) {
+    lines.push(`- ${step}`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function yesNo(value: boolean): string {
+  return value ? "yes" : "no";
+}
+
+function renderSupabaseDiagnosticsText(result: SupabaseDiagnosticsResult): string {
+  const lines = [
+    "Mint connect supabase",
+    "",
+    result.message,
+    "",
+    "CLI",
+    `- Supabase installed: ${yesNo(result.cli.direct.installed)}${result.cli.direct.version ? ` (${result.cli.direct.version})` : ""}`,
+    `- npx fallback: ${yesNo(result.cli.npx.available)}${result.cli.npx.version ? ` (${result.cli.npx.version})` : ""}`,
+    `- Mint will use: ${result.cli.selectedCommand}`,
+    "",
+    "Account",
+    `- Login: ${result.account.status.replace("_", " ")}`,
+  ];
+
+  if (result.account.detail) {
+    lines.push(`- Detail: ${result.account.detail}`);
+  }
+
+  if (result.account.organizations) {
+    lines.push(`- Organizations: ${result.account.organizations.length}`);
+  }
+
+  if (result.commands.status) {
+    lines.push("", "Probe", `- ${result.commands.status}`);
   }
 
   lines.push("", "Next steps:");
@@ -128,28 +169,60 @@ async function runSupabaseLogin(options: ConnectOptions) {
     };
   }
 
-  if (options.dryRun) {
+  if (options.dryRun || options.json) {
     return {
       provider: "supabase" as const,
       status: "ready_to_login" as const,
       connected: false,
-      message: "Dry run only. Mint did not start Supabase login.",
+      message: options.json
+        ? "JSON mode does not start interactive Supabase login. Run without --json to connect the account."
+        : "Dry run only. Mint did not start Supabase login.",
       cli,
       command: invocation.display,
       nextSteps: [`Would run: ${invocation.display}`],
     };
   }
 
-  const result = await execaCommandRunner.run(invocation.command, invocation.args);
+  process.stdout.write(
+    [
+      "Mint connect supabase",
+      "",
+      `Supabase installed: ${yesNo(cli.direct.installed)}${cli.direct.version ? ` (${cli.direct.version})` : ""}`,
+      `npx fallback: ${yesNo(cli.npx.available)}${cli.npx.version ? ` (${cli.npx.version})` : ""}`,
+      `Running: ${invocation.display}`,
+      "",
+      "Supabase may open a browser or ask for an access token. Mint will show the login prompt below.",
+      "",
+    ].join("\n"),
+  );
+
+  const result = await execaInteractiveCommandRunner.runInteractive(invocation.command, invocation.args);
+  const diagnostics = result.exitCode === 0 ? await inspectSupabaseConnection(execaCommandRunner) : undefined;
 
   return {
     provider: "supabase" as const,
-    status: result.exitCode === 0 ? ("logged_in" as const) : ("failed" as const),
-    connected: result.exitCode === 0,
-    message: result.exitCode === 0 ? "Supabase account login completed." : "Supabase login failed.",
+    status:
+      diagnostics?.account.status === "authenticated"
+        ? ("logged_in" as const)
+        : result.exitCode === 0
+          ? ("unknown" as const)
+          : ("failed" as const),
+    connected: diagnostics?.account.status === "authenticated",
+    message:
+      diagnostics?.account.status === "authenticated"
+        ? "Supabase account login completed."
+        : result.exitCode === 0
+          ? "Supabase login command finished, but Mint could not confirm an active account session."
+          : "Supabase login failed.",
     cli,
     command: invocation.display,
-    nextSteps: result.exitCode === 0 ? ["Run mint connect supabase --create"] : ["Retry mint connect supabase --login"],
+    diagnostics,
+    nextSteps:
+      diagnostics?.account.status === "authenticated"
+        ? ["Run mint connect supabase --create"]
+        : result.exitCode === 0
+          ? ["Run mint connect supabase to inspect login state", "Retry mint connect supabase --login if needed"]
+          : ["Retry mint connect supabase --login"],
     error: result.exitCode === 0 ? undefined : result.stderr || result.stdout || "Supabase login failed",
   };
 }
@@ -188,6 +261,24 @@ export function connectCommand(): Command {
       }
 
       if (provider?.key === "supabase") {
+        if (!options.login && !options.create && !options.projectRef) {
+          const result = await inspectSupabaseConnection(execaCommandRunner);
+          const payload = {
+            command: "connect",
+            service: "supabase",
+            result,
+            state: await readConnectState(projectRoot),
+          };
+
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(renderSupabaseDiagnosticsText(result));
+          return;
+        }
+
         if (options.login) {
           const result = await runSupabaseLogin(options);
           const payload = {

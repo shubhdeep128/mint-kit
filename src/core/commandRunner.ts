@@ -10,6 +10,10 @@ export type CommandRunner = {
   run(command: string, args: string[]): Promise<CommandResult>;
 };
 
+export type InteractiveCommandRunner = {
+  runInteractive(command: string, args: string[]): Promise<CommandResult>;
+};
+
 export const execaCommandRunner: CommandRunner = {
   async run(command, args) {
     try {
@@ -18,6 +22,25 @@ export const execaCommandRunner: CommandRunner = {
         exitCode: result.exitCode ?? (result.failed ? 1 : 0),
         stdout: result.stdout,
         stderr: result.stderr,
+      };
+    } catch (error) {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: error instanceof Error ? error.message : "Unknown command failure",
+      };
+    }
+  },
+};
+
+export const execaInteractiveCommandRunner: InteractiveCommandRunner = {
+  async runInteractive(command, args) {
+    try {
+      const result = await execa(command, args, {reject: false, stdio: "inherit"});
+      return {
+        exitCode: result.exitCode ?? (result.failed ? 1 : 0),
+        stdout: "",
+        stderr: "",
       };
     } catch (error) {
       return {

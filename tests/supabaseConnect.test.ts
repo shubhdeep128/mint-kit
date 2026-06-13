@@ -3,7 +3,7 @@ import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {describe, expect, it} from "vitest";
 import type {CommandRunner} from "../src/core/commandRunner.js";
-import {connectSupabase, detectSupabaseCli} from "../src/core/supabaseConnect.js";
+import {connectSupabase, detectSupabaseCli, inspectSupabaseConnection} from "../src/core/supabaseConnect.js";
 import {provisionSupabaseProject} from "../src/core/supabaseProvision.js";
 
 function runner(responses: Record<string, {exitCode: number; stdout?: string; stderr?: string}>): CommandRunner {
@@ -92,6 +92,61 @@ describe("connectSupabase", () => {
       status: "failed",
       connected: false,
       error: "not logged in",
+    });
+  });
+});
+
+describe("inspectSupabaseConnection", () => {
+  it("reports direct CLI missing, npx fallback available, and login missing", async () => {
+    const result = await inspectSupabaseConnection(
+      runner({
+        "supabase --version": {exitCode: 1},
+        "npx --version": {exitCode: 0, stdout: "11.6.2"},
+        "npx --yes supabase orgs list --output-format json": {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            error: {
+              message: "Access token not provided. Supply an access token by running `supabase login`.",
+            },
+          }),
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "needs_login",
+      cli: {
+        direct: {installed: false},
+        npx: {available: true, version: "11.6.2"},
+        selectedCommand: "npx --yes supabase",
+      },
+      account: {
+        status: "not_authenticated",
+      },
+    });
+  });
+
+  it("reports authenticated accounts and organization count", async () => {
+    const result = await inspectSupabaseConnection(
+      runner({
+        "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+        "npx --version": {exitCode: 0, stdout: "11.6.2"},
+        "supabase orgs list --output-format json": {
+          exitCode: 0,
+          stdout: JSON.stringify([{id: "org-one", slug: "org-one", name: "One"}]),
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      status: "ready",
+      cli: {
+        direct: {installed: true, version: "2.106.0"},
+      },
+      account: {
+        status: "authenticated",
+        organizations: [{name: "One", slug: "org-one"}],
+      },
     });
   });
 });

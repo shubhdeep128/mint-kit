@@ -3,6 +3,8 @@ import type {CommandRunner} from "./commandRunner.js";
 export type SupabaseCliMode = "direct" | "npx";
 
 export type SupabaseConnectStatus = "needs_project_ref" | "ready_to_link" | "linked" | "failed";
+export type SupabaseAccountStatus = "authenticated" | "not_authenticated" | "unknown" | "not_checked";
+export type SupabaseDiagnosticsStatus = "ready" | "needs_login" | "missing_cli" | "unknown";
 
 export type SupabaseConnectResult = {
   provider: "supabase";
@@ -28,6 +30,44 @@ export type SupabaseConnectInput = {
   dbPassword?: string | undefined;
   runner: CommandRunner;
   dryRun?: boolean | undefined;
+};
+
+export type SupabaseOrganizationSummary = {
+  id?: string | undefined;
+  slug?: string | undefined;
+  name: string;
+};
+
+export type SupabaseDiagnosticsResult = {
+  provider: "supabase";
+  status: SupabaseDiagnosticsStatus;
+  message: string;
+  dashboardUrl: string;
+  cli: {
+    mode: SupabaseCliMode;
+    available: boolean;
+    direct: {
+      installed: boolean;
+      version?: string | undefined;
+    };
+    npx: {
+      available: boolean;
+      version?: string | undefined;
+    };
+    selectedCommand: string;
+  };
+  account: {
+    status: SupabaseAccountStatus;
+    detail?: string | undefined;
+    organizations?: SupabaseOrganizationSummary[] | undefined;
+  };
+  commands: {
+    status?: string | undefined;
+    login: string;
+    create: string;
+    linkExisting: string;
+  };
+  nextSteps: string[];
 };
 
 const dashboardUrl = "https://supabase.com/dashboard";
@@ -74,21 +114,190 @@ export function buildLinkInvocation(mode: SupabaseCliMode, projectRef: string, d
 
 export async function detectSupabaseCli(runner: CommandRunner) {
   const direct = await runner.run("supabase", ["--version"]);
+  const npx = await runner.run("npx", ["--version"]);
+  const npxVersion = npx.stdout.trim() || undefined;
 
   if (direct.exitCode === 0) {
     return {
       mode: "direct" as const,
       available: true,
       version: direct.stdout.trim() || undefined,
+      direct: {
+        installed: true,
+        version: direct.stdout.trim() || undefined,
+      },
+      npx: {
+        available: npx.exitCode === 0,
+        version: npxVersion,
+      },
     };
   }
-
-  const npx = await runner.run("npx", ["--version"]);
 
   return {
     mode: "npx" as const,
     available: npx.exitCode === 0,
     version: undefined,
+    direct: {
+      installed: false,
+      version: undefined,
+    },
+    npx: {
+      available: npx.exitCode === 0,
+      version: npxVersion,
+    },
+  };
+}
+
+function parseJsonOutput(stdout: string): unknown | undefined {
+  if (!stdout.trim()) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+function extractSupabaseError(stdout: string, stderr: string): string | undefined {
+  const parsed = parseJsonOutput(stdout) ?? parseJsonOutput(stderr);
+
+  if (parsed && typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    const error = record.error;
+
+    if (error && typeof error === "object" && typeof (error as Record<string, unknown>).message === "string") {
+      return (error as Record<string, string>).message;
+    }
+
+    if (typeof record.message === "string") {
+      return record.message;
+    }
+  }
+
+  return stderr.trim() || stdout.trim() || undefined;
+}
+
+function normalizeOrganization(value: unknown): SupabaseOrganizationSummary | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+
+  const item = value as Record<string, unknown>;
+  const name = typeof item.name === "string" ? item.name : undefined;
+  const id = typeof item.id === "string" ? item.id : undefined;
+  const slug = typeof item.slug === "string" ? item.slug : typeof item.organization_slug === "string" ? item.organization_slug : undefined;
+
+  if (!name && !id && !slug) {
+    return undefined;
+  }
+
+  return {
+    name: name ?? slug ?? id ?? "Supabase organization",
+    id,
+    slug,
+  };
+}
+
+function normalizeOrganizations(value: unknown): SupabaseOrganizationSummary[] {
+  const source =
+    Array.isArray(value) ? value : value && typeof value === "object" && Array.isArray((value as {organizations?: unknown[]}).organizations)
+      ? (value as {organizations: unknown[]}).organizations
+      : [];
+
+  return source.map(normalizeOrganization).filter((item): item is SupabaseOrganizationSummary => Boolean(item));
+}
+
+function isAuthMissing(message: string | undefined): boolean {
+  return Boolean(message && /access token|auth|required|login|unauthorized|SUPABASE_ACCESS_TOKEN/i.test(message));
+}
+
+export async function inspectSupabaseConnection(runner: CommandRunner): Promise<SupabaseDiagnosticsResult> {
+  const cli = await detectSupabaseCli(runner);
+  const loginCommand = buildSupabaseInvocation(cli.mode, ["login"]).display;
+  const base = {
+    provider: "supabase" as const,
+    dashboardUrl,
+    cli: {
+      mode: cli.mode,
+      available: cli.available,
+      direct: cli.direct,
+      npx: cli.npx,
+      selectedCommand: cli.mode === "direct" ? "supabase" : "npx --yes supabase",
+    },
+    commands: {
+      login: loginCommand,
+      create: "mint connect supabase --create",
+      linkExisting: "mint connect supabase --project-ref <project-ref>",
+    },
+  };
+
+  if (!cli.available) {
+    return {
+      ...base,
+      status: "missing_cli",
+      message: "Mint could not find the Supabase CLI or an npx fallback.",
+      account: {
+        status: "not_checked",
+      },
+      nextSteps: ["Install Node/npm or Supabase CLI", "Run mint connect supabase again"],
+    };
+  }
+
+  const statusInvocation = buildSupabaseInvocation(cli.mode, ["orgs", "list", "--output-format", "json"]);
+  const status = await runner.run(statusInvocation.command, statusInvocation.args);
+  const detail = extractSupabaseError(status.stdout, status.stderr);
+
+  if (status.exitCode === 0) {
+    const organizations = normalizeOrganizations(parseJsonOutput(status.stdout));
+
+    return {
+      ...base,
+      status: "ready",
+      message: "Supabase CLI is available and your account login is active.",
+      account: {
+        status: "authenticated",
+        organizations,
+      },
+      commands: {
+        ...base.commands,
+        status: statusInvocation.display,
+      },
+      nextSteps: ["Create and configure a project with mint connect supabase --create"],
+    };
+  }
+
+  if (isAuthMissing(detail)) {
+    return {
+      ...base,
+      status: "needs_login",
+      message: "Supabase CLI is available, but Mint does not see an active Supabase login.",
+      account: {
+        status: "not_authenticated",
+        detail,
+      },
+      commands: {
+        ...base.commands,
+        status: statusInvocation.display,
+      },
+      nextSteps: ["Run mint connect supabase --login", "Then run mint connect supabase --create"],
+    };
+  }
+
+  return {
+    ...base,
+    status: "unknown",
+    message: "Mint could not determine your Supabase account login state.",
+    account: {
+      status: "unknown",
+      detail,
+    },
+    commands: {
+      ...base.commands,
+      status: statusInvocation.display,
+    },
+    nextSteps: ["Run mint connect supabase --login", "Retry mint connect supabase"],
   };
 }
 

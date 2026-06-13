@@ -24,11 +24,21 @@ pnpm verify
 
 ## Supabase Connect
 
+Inspect local Supabase tooling and account login:
+
+```bash
+mint connect supabase
+```
+
+Mint reports whether the direct `supabase` CLI is installed, whether `npx` fallback is available, which command it will use, and whether an account login is active.
+
 Connect the Supabase CLI to your account:
 
 ```bash
 mint connect supabase --login
 ```
+
+This is interactive: Supabase may open a browser or ask for an access token. Mint streams that prompt directly in your terminal.
 
 Create a Supabase project, link it locally, fetch API keys, and write Expo env:
 
