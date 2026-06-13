@@ -1,3 +1,6 @@
+import {mkdtemp, readFile, rm} from "node:fs/promises";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {describe, expect, it, vi} from "vitest";
 import {runMintCli} from "../src/cli.js";
 
@@ -69,6 +72,71 @@ describe("mint cli", () => {
     });
 
     write.mockRestore();
+  });
+
+  it("reports the exact RevenueCat credential needed", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-cli-"));
+    const previousCwd = process.cwd();
+    const previousKey = process.env.REVENUECAT_API_KEY;
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    try {
+      process.chdir(projectRoot);
+      delete process.env.REVENUECAT_API_KEY;
+
+      await runMintCli(["node", "mint", "connect", "revenuecat", "--json"]);
+
+      const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(JSON.parse(output)).toMatchObject({
+        command: "connect",
+        service: "revenuecat",
+        result: {
+          status: "needs_input",
+          connected: false,
+          missing: ["REVENUECAT_API_KEY"],
+        },
+      });
+      expect(output).toContain("mint connect revenuecat");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousKey) {
+        process.env.REVENUECAT_API_KEY = previousKey;
+      } else {
+        delete process.env.REVENUECAT_API_KEY;
+      }
+      write.mockRestore();
+      await rm(projectRoot, {recursive: true, force: true});
+    }
+  });
+
+  it("saves RevenueCat credentials without echoing the secret", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-cli-"));
+    const previousCwd = process.cwd();
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    try {
+      process.chdir(projectRoot);
+
+      await runMintCli(["node", "mint", "connect", "revenuecat", "--api-key", "rc_secret_test", "--json"]);
+
+      const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(JSON.parse(output)).toMatchObject({
+        command: "connect",
+        service: "revenuecat",
+        result: {
+          status: "connected",
+          connected: true,
+          variables: ["REVENUECAT_API_KEY"],
+        },
+      });
+      expect(output).not.toContain("rc_secret_test");
+      await expect(readFile(join(projectRoot, ".env.local"), "utf8")).resolves.toContain("REVENUECAT_API_KEY=rc_secret_test");
+      await expect(readFile(join(projectRoot, ".mint/connect-state.json"), "utf8")).resolves.not.toContain("rc_secret_test");
+    } finally {
+      process.chdir(previousCwd);
+      write.mockRestore();
+      await rm(projectRoot, {recursive: true, force: true});
+    }
   });
 
   it("shows supabase diagnostics without starting project linking", async () => {

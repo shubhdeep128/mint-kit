@@ -10,11 +10,11 @@ describe("MintInteractiveApp", () => {
     expect(lastFrame()).toContain("Mint");
     expect(lastFrame()).toContain("dream-coach");
     expect(lastFrame()).toContain("Supabase");
-    expect(lastFrame()).toContain("Validate every provider");
-    expect(lastFrame()).toContain("Apply resources together");
-    expect(lastFrame()).toContain("No background job is running");
-    expect(lastFrame()).toContain("Start guided setup");
+    expect(lastFrame()).toContain("Step 1 of 4: Supabase");
+    expect(lastFrame()).toContain("mint connect supabase --login");
+    expect(lastFrame()).toContain("press Enter");
+    expect(lastFrame()).toContain("No provider resources have been created");
     expect(lastFrame()).toContain("Keys");
-    expect(lastFrame()).not.toContain("mint connect");
+    expect(lastFrame()).not.toContain("skip");
   });
 });

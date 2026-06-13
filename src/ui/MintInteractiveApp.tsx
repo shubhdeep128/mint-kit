@@ -1,114 +1,150 @@
 import {useMemo, useState} from "react";
-import {ProgressBar, StatusMessage} from "@inkjs/ui";
+import {StatusMessage} from "@inkjs/ui";
 import {Box, Text, useApp, useInput} from "ink";
-import type {MintFlowModel} from "../core/flowModel.js";
+import {mintCommand} from "../core/commandDisplay.js";
+import type {MintFlowModel, ProviderKey} from "../core/flowModel.js";
 import {Frame} from "./components/Frame.js";
-import {ProgressRail} from "./components/ProgressRail.js";
-import {ProviderCard} from "./components/ProviderCard.js";
 import {theme} from "./theme.js";
+
+type ValidationResult = {
+  ok: boolean;
+  message: string;
+};
 
 type Props = {
   model: MintFlowModel;
+  validateProvider?: (provider: ProviderKey) => Promise<ValidationResult>;
 };
 
-type Screen = "overview" | "access" | "plan";
+type ProviderStatus = "waiting" | "checking" | "ready" | "needs_action";
 
-const actions = [
+type SetupProvider = {
+  key: ProviderKey;
+  label: string;
+  need: string;
+  commandArgs: string;
+  validate: string;
+};
+
+const setupProviders: SetupProvider[] = [
   {
-    key: "start",
-    label: "Start guided setup",
-    detail: "Collect provider access first. Mint will not create provider resources yet.",
+    key: "supabase",
+    label: "Supabase",
+    need: "A logged-in Supabase account. Mint will create the project later, after every provider validates.",
+    commandArgs: "connect supabase --login",
+    validate: "After login succeeds, come back here and press Enter.",
   },
   {
-    key: "plan",
-    label: "Preview apply plan",
-    detail: "Show the validation gate, resource apply phase, and rollback policy.",
+    key: "revenuecat",
+    label: "RevenueCat",
+    need: "RevenueCat API access and app SDK keys.",
+    commandArgs: "connect revenuecat",
+    validate: "After the connector succeeds, come back here and press Enter.",
   },
   {
-    key: "exit",
-    label: "Exit",
-    detail: "Return to the shell. Nothing is running in the background.",
+    key: "posthog",
+    label: "PostHog",
+    need: "PostHog project access and client token.",
+    commandArgs: "connect posthog",
+    validate: "After the connector succeeds, come back here and press Enter.",
   },
-] as const;
+  {
+    key: "eas",
+    label: "Expo/EAS",
+    need: "Expo account access for builds, credentials, and store submission.",
+    commandArgs: "connect expo",
+    validate: "After Expo login succeeds, come back here and press Enter.",
+  },
+];
 
-function nextIndex(current: number, direction: 1 | -1): number {
-  return (current + direction + actions.length) % actions.length;
+function statusColor(status: ProviderStatus) {
+  switch (status) {
+    case "ready":
+      return theme.good;
+    case "checking":
+      return theme.active;
+    case "needs_action":
+      return theme.warn;
+    case "waiting":
+      return theme.muted;
+  }
 }
 
-function ActionMenu({selectedIndex}: {selectedIndex: number}) {
-  return (
-    <Box flexDirection="column">
-      <Text bold>Command Center</Text>
-      {actions.map((action, index) => {
-        const selected = index === selectedIndex;
-
-        return (
-          <Box key={action.key} gap={1}>
-            <Text color={selected ? theme.accent : theme.muted}>{selected ? ">" : " "}</Text>
-            <Box flexDirection="column">
-              {selected ? (
-                <Text bold color={theme.accent}>
-                  {action.label}
-                </Text>
-              ) : (
-                <Text>{action.label}</Text>
-              )}
-              <Text color={theme.muted}>{action.detail}</Text>
-            </Box>
-          </Box>
-        );
-      })}
-    </Box>
-  );
+function statusLabel(status: ProviderStatus): string {
+  switch (status) {
+    case "ready":
+      return "ready";
+    case "checking":
+      return "checking";
+    case "needs_action":
+      return "needs action";
+    case "waiting":
+      return "waiting";
+  }
 }
 
-function AccessScreen({model}: {model: MintFlowModel}) {
-  return (
-    <Box flexDirection="column" gap={1}>
-      <StatusMessage variant="info">Provider access collection is selected. No resources will be created until every provider validates.</StatusMessage>
-      <Box flexDirection="column">
-        <Text bold>Access Queue</Text>
-        {model.stack
-          .filter(item => ["supabase", "revenuecat", "posthog", "eas"].includes(item.key))
-          .map(item => (
-            <Box key={item.key} gap={1}>
-              <Text color={theme.accent}>queued</Text>
-              <Text>{item.label}</Text>
-              <Text color={theme.muted}>{item.detail}</Text>
-            </Box>
-          ))}
-      </Box>
-      <Text color={theme.muted}>Press b for the command center or q to quit.</Text>
-    </Box>
-  );
+function defaultStatusMap(): Record<ProviderKey, ProviderStatus> {
+  return {
+    supabase: "waiting",
+    revenuecat: "waiting",
+    posthog: "waiting",
+    expo: "waiting",
+    eas: "waiting",
+  };
 }
 
-function PlanScreen({model}: {model: MintFlowModel}) {
-  return (
-    <Box flexDirection="column" gap={1}>
-      <StatusMessage variant="warning">Apply is locked until Supabase, RevenueCat, PostHog, Expo, and EAS are configured.</StatusMessage>
-      <Box flexDirection="column">
-        <Text bold>Apply Contract</Text>
-        <Text>1. Collect provider access and local app settings.</Text>
-        <Text>2. Validate every provider without creating resources.</Text>
-        <Text>3. Apply provider resources together.</Text>
-        <Text>4. Roll back Mint-created resources if any apply step fails.</Text>
-      </Box>
-      <ProgressRail steps={model.steps} />
-      <Text color={theme.muted}>Press b for the command center or q to quit.</Text>
-    </Box>
-  );
+function nextUnfinishedIndex(statuses: Record<ProviderKey, ProviderStatus>, fromIndex: number): number {
+  for (let index = fromIndex + 1; index < setupProviders.length; index += 1) {
+    const status = statuses[setupProviders[index]!.key];
+
+    if (status !== "ready") {
+      return index;
+    }
+  }
+
+  return fromIndex;
 }
 
-export function MintInteractiveApp({model}: Props) {
+function providerProgress(statuses: Record<ProviderKey, ProviderStatus>): string {
+  const done = setupProviders.filter(provider => statuses[provider.key] === "ready").length;
+  return `${done}/${setupProviders.length}`;
+}
+
+export function MintInteractiveApp({model, validateProvider}: Props) {
   const {exit} = useApp();
-  const [screen, setScreen] = useState<Screen>("overview");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const progress = useMemo(() => {
-    const activeIndex = model.steps.findIndex(step => step.status === "active");
-    const safeIndex = activeIndex === -1 ? 0 : activeIndex + 1;
-    return Math.max(8, Math.round((safeIndex / Math.max(1, model.steps.length)) * 100));
-  }, [model.steps]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [statuses, setStatuses] = useState<Record<ProviderKey, ProviderStatus>>(() => defaultStatusMap());
+  const [message, setMessage] = useState("Run the command for this step, then press Enter to validate.");
+  const activeProvider = setupProviders[activeIndex]!;
+  const allDone = useMemo(
+    () => setupProviders.every(provider => statuses[provider.key] === "ready"),
+    [statuses],
+  );
+
+  async function validateActiveProvider() {
+    if (statuses[activeProvider.key] === "checking") {
+      return;
+    }
+
+    setStatuses(current => ({...current, [activeProvider.key]: "checking"}));
+
+    const result = validateProvider
+      ? await validateProvider(activeProvider.key)
+      : {
+          ok: false,
+          message: `Run ${mintCommand(activeProvider.commandArgs)}, then press Enter here to validate again.`,
+        };
+
+    setStatuses(current => {
+      const next = {...current, [activeProvider.key]: result.ok ? ("ready" as const) : ("needs_action" as const)};
+      if (result.ok) {
+        setActiveIndex(index => nextUnfinishedIndex(next, index));
+      }
+
+      return next;
+    });
+    setMessage(result.message);
+  }
 
   useInput((input, key) => {
     if (input === "q" || key.escape) {
@@ -116,71 +152,62 @@ export function MintInteractiveApp({model}: Props) {
       return;
     }
 
-    if (input === "b" && screen !== "overview") {
-      setScreen("overview");
-      return;
-    }
-
-    if (screen !== "overview") {
-      return;
-    }
-
-    if (key.upArrow || input === "k") {
-      setSelectedIndex(index => nextIndex(index, -1));
-      return;
-    }
-
-    if (key.downArrow || input === "j") {
-      setSelectedIndex(index => nextIndex(index, 1));
+    if (input === "b") {
+      setActiveIndex(index => Math.max(0, index - 1));
+      setMessage("Moved back. Run the command for this step, then press Enter to validate.");
       return;
     }
 
     if (key.return) {
-      const action = actions[selectedIndex];
-
-      if (action?.key === "start") {
-        setScreen("access");
-        return;
-      }
-
-      if (action?.key === "plan") {
-        setScreen("plan");
-        return;
-      }
-
-      exit();
+      void validateActiveProvider();
     }
   });
-
-  const body =
-    screen === "access" ? (
-      <AccessScreen model={model} />
-    ) : screen === "plan" ? (
-      <PlanScreen model={model} />
-    ) : (
-      <Box flexDirection="column" gap={1}>
-        <StatusMessage variant="info">No background job is running. Waiting for input.</StatusMessage>
-        <Box flexDirection="column">
-          <Text bold>Readiness</Text>
-          <ProgressBar value={progress} />
-        </Box>
-        <Box flexDirection="column">
-          <Text bold>Stack</Text>
-          {model.stack.map(check => (
-            <ProviderCard key={`${check.key}-${check.label}`} check={check} />
-          ))}
-        </Box>
-        <ProgressRail steps={model.steps} />
-        <ActionMenu selectedIndex={selectedIndex} />
-      </Box>
-    );
 
   return (
     <Frame title={model.title} subtitle={model.subtitle}>
       <Box flexDirection="column" gap={1}>
-        {body}
-        {model.nextCommand ? <Text color="gray">Repair command: {model.nextCommand}</Text> : null}
-        <Text color={theme.muted}>Keys: up/down or j/k select, enter choose, b back, q quit</Text>
+        <StatusMessage variant={allDone ? "success" : "info"}>
+          {allDone
+            ? "All provider access is ready. Mint can apply resources together next."
+            : "Setup is waiting for you. No provider resources have been created."}
+        </StatusMessage>
+
+        <Box flexDirection="column">
+          <Text bold>
+            Step {activeIndex + 1} of {setupProviders.length}: {activeProvider.label}
+          </Text>
+          <Text>
+            Need: <Text color={theme.muted}>{activeProvider.need}</Text>
+          </Text>
+          <Text>Run this command:</Text>
+          <Box paddingLeft={2}>
+            <Text color={theme.accent}>{mintCommand(activeProvider.commandArgs)}</Text>
+          </Box>
+          <Text color={theme.muted}>{activeProvider.validate}</Text>
+        </Box>
+
+        <Box flexDirection="column">
+          <Text bold>Validate</Text>
+          <Text>{message}</Text>
+        </Box>
+
+        <Box flexDirection="column">
+          <Text bold>Providers ({providerProgress(statuses)} ready)</Text>
+          {setupProviders.map(provider => {
+            const status = statuses[provider.key];
+            const selected = provider.key === activeProvider.key;
+
+            return (
+              <Box key={provider.key} gap={1}>
+                <Text color={selected ? theme.accent : theme.muted}>{selected ? ">" : " "}</Text>
+                <Text>{provider.label}</Text>
+                <Text color={statusColor(status)}>{statusLabel(status)}</Text>
+              </Box>
+            );
+          })}
+        </Box>
+
+        <Text color={theme.muted}>Keys: Enter validate, b back, q quit</Text>
       </Box>
     </Frame>
   );

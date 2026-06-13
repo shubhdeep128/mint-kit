@@ -18,6 +18,48 @@ export function resolveProjectPath(projectRoot: string, filePath: string): strin
   return isAbsolute(filePath) ? filePath : join(projectRoot, filePath);
 }
 
+function unquoteEnvValue(value: string): string {
+  const trimmed = value.trim();
+
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      return JSON.parse(trimmed) as string;
+    } catch {
+      return trimmed.slice(1, -1);
+    }
+  }
+
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
+export function parseEnvFile(content: string): Record<string, string> {
+  const values: Record<string, string> = {};
+
+  for (const line of content.split(/\r?\n/)) {
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line.trim());
+
+    if (!match) {
+      continue;
+    }
+
+    values[match[1]!] = unquoteEnvValue(match[2] ?? "");
+  }
+
+  return values;
+}
+
+export async function readEnvFileValues(projectRoot: string, filePath: string): Promise<Record<string, string>> {
+  try {
+    return parseEnvFile(await readFile(resolveProjectPath(projectRoot, filePath), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 export async function upsertEnvFile(
   projectRoot: string,
   filePath: string,

@@ -1,5 +1,15 @@
+import {createElement} from "react";
 import {Command} from "commander";
+import {mintCommand} from "../core/commandDisplay.js";
 import {execaCommandRunner, execaInteractiveCommandRunner} from "../core/commandRunner.js";
+import {
+  connectCredentialProvider,
+  getCredentialProviderSpec,
+  inspectCredentialProvider,
+  type CredentialConnectResult,
+  type CredentialInspection,
+  type CredentialProviderSpec,
+} from "../core/providerCredentials.js";
 import {providerCatalog} from "../core/providerCatalog.js";
 import {provisionSupabaseProject, type SupabaseProvisionResult} from "../core/supabaseProvision.js";
 import {
@@ -11,14 +21,19 @@ import {
   type SupabaseDiagnosticsResult,
 } from "../core/supabaseConnect.js";
 import {connectStatePath, markProvider, readConnectState} from "../state/connectState.js";
+import {CredentialConnectApp} from "../ui/CredentialConnectApp.js";
+import {renderInteractive} from "../ui/renderInteractive.js";
 
 type ConnectOptions = {
   json?: boolean;
-  skip?: boolean;
+  token?: string;
+  apiKey?: string;
+  personalApiKey?: string;
+  expoToken?: string;
   projectRef?: string;
   dbPassword?: string;
   login?: boolean;
-  noBrowser?: boolean;
+  browser?: boolean;
   create?: boolean;
   projectName?: string;
   orgId?: string;
@@ -167,9 +182,86 @@ function renderSupabaseProvisionText(result: SupabaseProvisionResult, statePath?
   return `${lines.join("\n")}\n`;
 }
 
+function credentialValuesFromOptions(
+  spec: CredentialProviderSpec,
+  options: ConnectOptions,
+): Record<string, string> {
+  const optionValues: Record<string, string | undefined> = {
+    REVENUECAT_API_KEY: options.apiKey ?? options.token,
+    POSTHOG_PERSONAL_API_KEY: options.personalApiKey ?? options.token,
+    EXPO_TOKEN: options.expoToken ?? options.token,
+  };
+
+  return Object.fromEntries(
+    spec.fields.map(field => [field.envName, optionValues[field.envName] ?? process.env[field.envName] ?? ""]),
+  );
+}
+
+function hasAllCredentialValues(spec: CredentialProviderSpec, values: Record<string, string>): boolean {
+  return spec.fields.every(field => Boolean(values[field.envName]?.trim()));
+}
+
+function resultFromCredentialInspection(
+  spec: CredentialProviderSpec,
+  inspection: CredentialInspection,
+  envFile: string,
+): CredentialConnectResult {
+  if (inspection.connected) {
+    return {
+      provider: spec.key,
+      status: "connected",
+      connected: true,
+      message: `${spec.label} is already configured${inspection.source ? ` via ${inspection.source}` : ""}.`,
+      variables: inspection.variables,
+      missing: [],
+      nextSteps: ["Return to the setup flow", "Press Enter to validate this provider"],
+    };
+  }
+
+  return {
+    provider: spec.key,
+    status: "needs_input",
+    connected: false,
+    message: `${spec.label} needs ${inspection.missing.join(", ")}.`,
+    variables: inspection.variables,
+    missing: inspection.missing,
+    nextSteps: [
+      `Run ${mintCommand(spec.commandArgs)} and paste the value when prompted`,
+      `Or set ${inspection.missing.join(", ")} in ${envFile}`,
+      "Return to the setup flow and press Enter",
+    ],
+  };
+}
+
+function renderCredentialConnectText(result: CredentialConnectResult, spec: CredentialProviderSpec, envFile: string): string {
+  const lines = [`Mint connect ${spec.label}`, "", result.message];
+
+  if (result.env) {
+    lines.push("", `Env file: ${result.env.path}`);
+  } else {
+    lines.push("", `Env file: ${envFile}`);
+  }
+
+  if (result.statePath) {
+    lines.push(`State written: ${result.statePath}`);
+  }
+
+  lines.push("", "Variables:");
+  for (const variable of result.variables) {
+    lines.push(`- ${variable}`);
+  }
+
+  lines.push("", "Next steps:");
+  for (const step of result.nextSteps) {
+    lines.push(`- ${step}`);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 async function runSupabaseLogin(options: ConnectOptions) {
   const cli = await detectSupabaseCli(execaCommandRunner);
-  const args = ["login", ...(options.noBrowser ? ["--no-browser"] : [])];
+  const args = ["login", ...(options.browser === false ? ["--no-browser"] : [])];
   const invocation = buildSupabaseInvocation(cli.mode, args);
 
   if (!cli.available) {
@@ -248,7 +340,10 @@ export function connectCommand(): Command {
     .description("Connect or repair Mint service configuration.")
     .argument("[service]", "Service to connect.")
     .option("--json", "Render machine-readable output.")
-    .option("--skip", "Mark the service as skipped for this project.")
+    .option("--token <token>", "Provider token for RevenueCat, PostHog, or Expo.")
+    .option("--api-key <key>", "RevenueCat API key.")
+    .option("--personal-api-key <key>", "PostHog personal API key.")
+    .option("--expo-token <token>", "Expo access token.")
     .option("--project-ref <ref>", "Supabase project ref to link.")
     .option("--db-password <password>", "Supabase database password for linking or project creation.")
     .option("--login", "Connect the Supabase CLI to your account.")
@@ -268,12 +363,6 @@ export function connectCommand(): Command {
 
       if (service && !provider) {
         throw new Error(`Unknown service "${service}". Use one of: ${providerCatalog.map(item => item.key).join(", ")}`);
-      }
-
-      if (provider && options.skip) {
-        const state = await markProvider(projectRoot, provider.key, "skipped");
-        process.stdout.write(`${JSON.stringify(state, null, 2)}\n`);
-        return;
       }
 
       if (provider?.key === "supabase") {
@@ -386,6 +475,60 @@ export function connectCommand(): Command {
         }
 
         process.stdout.write(renderSupabaseText(result, result.connected ? connectStatePath(projectRoot) : undefined));
+        return;
+      }
+
+      const credentialSpec = provider ? getCredentialProviderSpec(provider.key) : undefined;
+
+      if (credentialSpec) {
+        const envFile = options.envFile ?? ".env.local";
+        const suppliedValues = credentialValuesFromOptions(credentialSpec, options);
+
+        if (hasAllCredentialValues(credentialSpec, suppliedValues)) {
+          const result = await connectCredentialProvider(projectRoot, credentialSpec, suppliedValues, envFile);
+          const payload = {
+            command: "connect",
+            service: credentialSpec.key,
+            result,
+            state: result.state ?? (await readConnectState(projectRoot)),
+          };
+
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(renderCredentialConnectText(result, credentialSpec, envFile));
+          return;
+        }
+
+        const inspection = await inspectCredentialProvider(projectRoot, credentialSpec, envFile);
+        const inspectedResult = resultFromCredentialInspection(credentialSpec, inspection, envFile);
+
+        if (inspection.connected || options.json || !process.stdout.isTTY) {
+          const payload = {
+            command: "connect",
+            service: credentialSpec.key,
+            result: inspectedResult,
+            state: await readConnectState(projectRoot),
+          };
+
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(renderCredentialConnectText(inspectedResult, credentialSpec, envFile));
+          return;
+        }
+
+        await renderInteractive(
+          createElement(CredentialConnectApp, {
+            spec: credentialSpec,
+            envFile,
+            onSubmit: values => connectCredentialProvider(projectRoot, credentialSpec, values, envFile),
+          }),
+        );
         return;
       }
 
