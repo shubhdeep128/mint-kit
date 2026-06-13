@@ -14,6 +14,7 @@ export type SupabaseProvisionStatus =
   | "needs_login"
   | "needs_org_selection"
   | "ready_to_create"
+  | "blocked_until_all_configured"
   | "provisioned"
   | "partial"
   | "failed";
@@ -54,6 +55,12 @@ export type SupabaseProvisionResult = {
   };
   nextSteps: string[];
   warnings: string[];
+  cleanup?: {
+    attempted: boolean;
+    commands: string[];
+    success?: boolean | undefined;
+    error?: string | undefined;
+  } | undefined;
   error?: string | undefined;
 };
 
@@ -69,6 +76,9 @@ export type SupabaseProvisionInput = {
   serverEnvFile?: string | undefined;
   dryRun?: boolean | undefined;
   link?: boolean | undefined;
+  apply?: boolean | undefined;
+  allProvidersConfigured?: boolean | undefined;
+  cleanupOnFailure?: boolean | undefined;
 };
 
 type SupabaseCliDetection = Awaited<ReturnType<typeof detectSupabaseCli>>;
@@ -284,6 +294,18 @@ async function fetchApiKeys(runner: CommandRunner, mode: SupabaseCliMode, projec
   };
 }
 
+async function cleanupSupabaseProject(runner: CommandRunner, mode: SupabaseCliMode, projectRef: string) {
+  const invocation = buildSupabaseInvocation(mode, ["projects", "delete", projectRef, "--yes", "--output-format", "json"]);
+  const result = await runner.run(invocation.command, invocation.args);
+
+  return {
+    attempted: true,
+    commands: [invocation.display],
+    success: result.exitCode === 0,
+    error: result.exitCode === 0 ? undefined : result.stderr || result.stdout || "Supabase project cleanup failed",
+  };
+}
+
 export async function provisionSupabaseProject(input: SupabaseProvisionInput): Promise<SupabaseProvisionResult> {
   const cli = await detectSupabaseCli(input.runner);
   const base = createBase(cli);
@@ -291,6 +313,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   const region = input.region?.trim() || defaultRegion;
   const size = input.size?.trim() || defaultSize;
   const shouldLink = input.link !== false;
+  const shouldCleanup = input.cleanupOnFailure !== false;
   const dbPassword = input.dbPassword || generatedDatabasePassword();
   const envFile = input.envFile ?? ".env.local";
 
@@ -346,6 +369,34 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
       },
       nextSteps: ["Run without --dry-run to create and configure the project."],
       warnings: input.orgId ? [] : ["Mint will list organizations and auto-select only if exactly one organization is available."],
+    };
+  }
+
+  if (!input.apply || !input.allProvidersConfigured) {
+    return {
+      ...base,
+      status: "blocked_until_all_configured",
+      connected: false,
+      message:
+        "Mint staged the Supabase resource plan but did not create anything because every provider must be configured before apply.",
+      commands: [
+        ...(input.orgId ? [] : [commandText(cli.mode, withJsonOutput(["orgs", "list"]))]),
+        commandText(cli.mode, createArgs, createDisplayArgs),
+        shouldLink ? buildLinkInvocation(cli.mode, "<created-project-ref>", dbPassword).display : "",
+        commandText(cli.mode, withJsonOutput(["projects", "api-keys", "--project-ref", "<created-project-ref>"])),
+      ].filter(Boolean),
+      env: {
+        variables: [
+          "EXPO_PUBLIC_SUPABASE_URL",
+          "EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+          "EXPO_PUBLIC_SUPABASE_ANON_KEY",
+        ],
+      },
+      nextSteps: [
+        "Finish configuring RevenueCat, PostHog, Expo, and EAS",
+        "Mint will apply provider resources only after every provider is ready",
+      ],
+      warnings: ["No Supabase project was created."],
     };
   }
 
@@ -437,6 +488,25 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
 
     if (!linked) {
       warnings.push(linkResult.error ?? "Project created, but local linking failed.");
+      const cleanup = shouldCleanup ? await cleanupSupabaseProject(input.runner, cli.mode, project.ref) : undefined;
+
+      return {
+        ...base,
+        status: "failed",
+        connected: false,
+        message: cleanup?.success
+          ? "Supabase project creation was rolled back because local linking failed."
+          : "Supabase project was created, but local linking failed.",
+        project,
+        organization,
+        commands: [...commands, ...(cleanup?.commands ?? [])],
+        nextSteps: cleanup?.success
+          ? ["Fix Supabase login or database password, then retry the Mint apply flow"]
+          : [`Delete the Supabase project manually if needed: ${project.ref}`, "Then retry the Mint apply flow"],
+        warnings,
+        cleanup,
+        error: linkResult.error ?? "Supabase link failed",
+      };
     }
   }
 
@@ -444,37 +514,66 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   commands.push(apiKeys.invocation.display);
 
   if (apiKeys.result.exitCode !== 0 || !apiKeys.keys?.publishableKey) {
+    const cleanup = shouldCleanup ? await cleanupSupabaseProject(input.runner, cli.mode, project.ref) : undefined;
+
     return {
       ...base,
-      status: "partial",
-      connected: linked,
-      message: "Supabase project was created, but Mint could not fetch a publishable API key yet.",
+      status: "failed",
+      connected: false,
+      message: cleanup?.success
+        ? "Supabase project creation was rolled back because Mint could not fetch a publishable API key."
+        : "Supabase project was created, but Mint could not fetch a publishable API key.",
       project,
       organization,
-      commands,
+      commands: [...commands, ...(cleanup?.commands ?? [])],
       nextSteps: [
-        `Retry key sync: mint connect supabase --project-ref ${project.ref}`,
-        "Open the Supabase dashboard if the project is still coming up.",
+        ...(cleanup?.success ? ["Retry the Mint apply flow after Supabase reports the account ready"] : [`Delete the Supabase project manually if needed: ${project.ref}`]),
       ],
       warnings,
+      cleanup,
       error: apiKeys.result.stderr || apiKeys.result.stdout || "Missing publishable Supabase API key",
     };
   }
 
   const url = projectUrl(project.ref);
-  const expoEnv = await upsertEnvFile(input.projectRoot, envFile, {
-    EXPO_PUBLIC_SUPABASE_URL: url,
-    EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: apiKeys.keys.publishableKey,
-    EXPO_PUBLIC_SUPABASE_ANON_KEY: apiKeys.keys.publishableKey,
-  });
-  const serverEnv = input.serverEnvFile
-    ? await upsertEnvFile(input.projectRoot, input.serverEnvFile, {
-        SUPABASE_URL: url,
-        SUPABASE_PROJECT_REF: project.ref,
-        SUPABASE_SECRET_KEY: apiKeys.keys.secretKey,
-        SUPABASE_SERVICE_ROLE_KEY: apiKeys.keys.serviceRoleKey,
-      })
-    : undefined;
+  let expoEnv: EnvWriteResult;
+  let serverEnv: EnvWriteResult | undefined;
+
+  try {
+    expoEnv = await upsertEnvFile(input.projectRoot, envFile, {
+      EXPO_PUBLIC_SUPABASE_URL: url,
+      EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: apiKeys.keys.publishableKey,
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: apiKeys.keys.publishableKey,
+    });
+    serverEnv = input.serverEnvFile
+      ? await upsertEnvFile(input.projectRoot, input.serverEnvFile, {
+          SUPABASE_URL: url,
+          SUPABASE_PROJECT_REF: project.ref,
+          SUPABASE_SECRET_KEY: apiKeys.keys.secretKey,
+          SUPABASE_SERVICE_ROLE_KEY: apiKeys.keys.serviceRoleKey,
+        })
+      : undefined;
+  } catch (error) {
+    const cleanup = shouldCleanup ? await cleanupSupabaseProject(input.runner, cli.mode, project.ref) : undefined;
+
+    return {
+      ...base,
+      status: "failed",
+      connected: false,
+      message: cleanup?.success
+        ? "Supabase project creation was rolled back because Mint could not write env files."
+        : "Supabase project was created, but Mint could not write env files.",
+      project,
+      organization,
+      commands: [...commands, ...(cleanup?.commands ?? [])],
+      nextSteps: cleanup?.success
+        ? ["Fix local file permissions, then retry the Mint apply flow"]
+        : [`Delete the Supabase project manually if needed: ${project.ref}`, "Fix local file permissions, then retry"],
+      warnings,
+      cleanup,
+      error: error instanceof Error ? error.message : "Failed to write Supabase env files",
+    };
+  }
 
   return {
     ...base,

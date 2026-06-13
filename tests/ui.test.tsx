@@ -10,7 +10,8 @@ describe("MintInteractiveApp", () => {
     expect(lastFrame()).toContain("Mint");
     expect(lastFrame()).toContain("dream-coach");
     expect(lastFrame()).toContain("Supabase");
-    expect(lastFrame()).toContain("Provision Supabase");
+    expect(lastFrame()).toContain("Validate every provider");
+    expect(lastFrame()).toContain("Apply resources together");
     expect(lastFrame()).not.toContain("mint connect");
   });
 });

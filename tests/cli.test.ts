@@ -24,7 +24,8 @@ describe("mint cli", () => {
     const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(output).toContain("Mint");
     expect(output).toContain("dream-coach");
-    expect(output).toContain("Provision Supabase");
+    expect(output).toContain("Validate every provider");
+    expect(output).toContain("Apply resources together");
     expect(output).not.toContain("Next: mint connect");
 
     write.mockRestore();
@@ -133,7 +134,7 @@ describe("mint cli", () => {
     write.mockRestore();
   });
 
-  it("shows the supabase create plan in dry-run mode", async () => {
+  it("blocks supabase creation until every provider is configured", async () => {
     const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
     await runMintCli([
@@ -148,7 +149,6 @@ describe("mint cli", () => {
       "cool-green-pqdr0qc",
       "--db-password",
       "super-secret-password",
-      "--dry-run",
       "--json",
     ]);
 
@@ -157,13 +157,14 @@ describe("mint cli", () => {
       command: "connect",
       service: "supabase",
       result: {
-        status: "ready_to_create",
+        status: "blocked_until_all_configured",
         connected: false,
       },
     });
     expect(output).toContain("supabase projects create dream-coach");
     expect(output).toContain("--db-password ********");
     expect(output).not.toContain("super-secret-password");
+    expect(output).toContain("No Supabase project was created");
 
     write.mockRestore();
   });

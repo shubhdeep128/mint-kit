@@ -264,7 +264,7 @@ export async function inspectSupabaseConnection(runner: CommandRunner): Promise<
         ...base.commands,
         status: statusInvocation.display,
       },
-      nextSteps: ["Create and configure a project with mint connect supabase --create"],
+      nextSteps: ["Stage Supabase with mint connect supabase --create", "Mint will create resources only after every provider is configured"],
     };
   }
 
@@ -339,7 +339,7 @@ export async function connectSupabase(input: SupabaseConnectInput): Promise<Supa
       message: "No Supabase project was selected, so Mint has not linked or provisioned anything yet.",
       nextSteps: [
         "Run mint connect supabase --login",
-        "Create and configure a project with mint connect supabase --create",
+        "Stage Supabase config with mint connect supabase --create",
         "Or link an existing project with mint connect supabase --project-ref <project-ref>",
       ],
     };

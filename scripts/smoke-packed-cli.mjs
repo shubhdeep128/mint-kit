@@ -26,7 +26,7 @@ if (!tarball) {
 const tarballPath = join(artifactsDir, tarball);
 
 function assertIntegratedNewOutput(output, label) {
-  if (!output.includes("Mint will create a project") || !output.includes("Provision Supabase")) {
+  if (!output.includes("Mint will stage project settings") || !output.includes("Apply resources together")) {
     throw new Error(`${label} did not run the integrated Mint new flow:\n${output}`);
   }
 

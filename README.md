@@ -9,7 +9,7 @@ pnpm dlx @usemint/cli@latest new dream-coach
 npx @usemint/cli@latest new dream-coach
 ```
 
-`mint new` is the happy path: it creates the app shell and then walks through service provisioning. `mint connect` is for repair, resume, or connecting services later.
+`mint new` is the happy path: it creates the app shell, collects provider access, validates every provider, then applies provider resources together. `mint connect` is for repair, resume, or connecting services later.
 
 After global install:
 
@@ -48,11 +48,13 @@ mint connect supabase --login
 
 This is interactive: Supabase may open a browser or ask for an access token. Mint streams that prompt directly in your terminal.
 
-Create a Supabase project, link it locally, fetch API keys, and write Expo env:
+Stage Supabase project settings:
 
 ```bash
 mint connect supabase --create
 ```
+
+This does not create a hosted Supabase project by itself. Mint-owned resources are created only during the all-provider apply phase, after Supabase, RevenueCat, PostHog, Expo, and EAS are configured.
 
 Dry-run the exact commands first:
 
@@ -60,7 +62,7 @@ Dry-run the exact commands first:
 mint connect supabase --create --project-name dream-coach --org-id your-org-slug --dry-run
 ```
 
-Mint uses `supabase` when the CLI is available and falls back to `npx --yes supabase` otherwise. The create flow runs `projects create`, links the created project, fetches project API keys, writes `.env.local`, and records Supabase in `.mint/connect-state.json`.
+Mint uses `supabase` when the CLI is available and falls back to `npx --yes supabase` otherwise. During the apply phase, Mint runs `projects create`, links the created project, fetches project API keys, writes `.env.local`, and records Supabase in `.mint/connect-state.json`. If any later apply step fails, Mint attempts to delete resources it created in that run.
 
 If your Supabase account has multiple organizations, pass the organization explicitly:
 

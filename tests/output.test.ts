@@ -27,8 +27,9 @@ describe("renderers", () => {
   it("renders default new flow as integrated provisioning", () => {
     const output = renderText(createNewFlowModel("dream-coach"));
     expect(output).toContain("Mint");
-    expect(output).toContain("Provision Supabase");
-    expect(output).toContain("Mint will create a project");
+    expect(output).toContain("Validate every provider");
+    expect(output).toContain("Apply resources together");
+    expect(output).toContain("Mint will stage project settings");
     expect(output).not.toContain("mint connect");
   });
 

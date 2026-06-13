@@ -21,6 +21,25 @@ function runner(responses: Record<string, {exitCode: number; stdout?: string; st
   };
 }
 
+function recordingRunner(responses: Record<string, {exitCode: number; stdout?: string; stderr?: string}>) {
+  const calls: string[] = [];
+  const commandRunner: CommandRunner = {
+    async run(command, args) {
+      const key = `${command} ${args.join(" ")}`;
+      calls.push(key);
+      const response = responses[key] ?? {exitCode: 1, stderr: `missing mock for ${key}`};
+
+      return {
+        exitCode: response.exitCode,
+        stdout: response.stdout ?? "",
+        stderr: response.stderr ?? "",
+      };
+    },
+  };
+
+  return {runner: commandRunner, calls};
+}
+
 describe("detectSupabaseCli", () => {
   it("uses direct supabase when available", async () => {
     const result = await detectSupabaseCli(
@@ -152,6 +171,26 @@ describe("inspectSupabaseConnection", () => {
 });
 
 describe("provisionSupabaseProject", () => {
+  it("does not create provider resources before the all-provider apply phase", async () => {
+    const {runner: commandRunner, calls} = recordingRunner({
+      "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+    });
+    const result = await provisionSupabaseProject({
+      projectRoot: "/tmp/dream-coach",
+      projectName: "dream-coach",
+      orgId: "cool-green-pqdr0qc",
+      dbPassword: "super-secret-password",
+      runner: commandRunner,
+    });
+
+    expect(result).toMatchObject({
+      status: "blocked_until_all_configured",
+      connected: false,
+    });
+    expect(result.warnings.join("\n")).toContain("No Supabase project was created");
+    expect(calls.join("\n")).not.toContain("projects create");
+  });
+
   it("shows a redacted create plan in dry-run mode", async () => {
     const result = await provisionSupabaseProject({
       projectRoot: "/tmp/dream-coach",
@@ -177,6 +216,8 @@ describe("provisionSupabaseProject", () => {
     const result = await provisionSupabaseProject({
       projectRoot: "/tmp/dream-coach",
       projectName: "dream-coach",
+      apply: true,
+      allProvidersConfigured: true,
       runner: runner({
         "supabase --version": {exitCode: 0, stdout: "2.106.0"},
         "supabase orgs list --output-format json": {
@@ -208,6 +249,8 @@ describe("provisionSupabaseProject", () => {
       orgId: "cool-green-pqdr0qc",
       dbPassword: "test-password",
       serverEnvFile: "server/.env",
+      apply: true,
+      allProvidersConfigured: true,
       runner: runner({
         "supabase --version": {exitCode: 0, stdout: "2.106.0"},
         "supabase projects create dream-coach --org-id cool-green-pqdr0qc --db-password test-password --region us-east-1 --size nano --yes --output-format json": {
@@ -246,5 +289,47 @@ describe("provisionSupabaseProject", () => {
     expect(serverEnv).toContain("SUPABASE_SECRET_KEY=sb_secret_456");
     expect(JSON.stringify(result)).not.toContain("test-password");
     expect(JSON.stringify(result)).not.toContain("sb_secret_456");
+  });
+
+  it("rolls back a created project when later configuration fails", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-supabase-rollback-"));
+    const projectRef = "abcdefghijklmnopqrst";
+    const result = await provisionSupabaseProject({
+      projectRoot,
+      projectName: "dream-coach",
+      orgId: "cool-green-pqdr0qc",
+      dbPassword: "test-password",
+      apply: true,
+      allProvidersConfigured: true,
+      runner: runner({
+        "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+        "supabase projects create dream-coach --org-id cool-green-pqdr0qc --db-password test-password --region us-east-1 --size nano --yes --output-format json": {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ref: projectRef,
+            name: "dream-coach",
+            organization_slug: "cool-green-pqdr0qc",
+            region: "us-east-1",
+            status: "COMING_UP",
+          }),
+        },
+        "supabase link --project-ref abcdefghijklmnopqrst --password test-password": {exitCode: 0, stdout: "Linked project"},
+        "supabase projects api-keys --project-ref abcdefghijklmnopqrst --output-format json": {
+          exitCode: 1,
+          stderr: "keys not ready",
+        },
+        "supabase projects delete abcdefghijklmnopqrst --yes --output-format json": {exitCode: 0, stdout: "{}"},
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      connected: false,
+      cleanup: {
+        attempted: true,
+        success: true,
+      },
+    });
+    expect(result.commands.join("\n")).toContain("supabase projects delete abcdefghijklmnopqrst --yes --output-format json");
   });
 });

@@ -139,6 +139,22 @@ function renderSupabaseProvisionText(result: SupabaseProvisionResult, statePath?
     }
   }
 
+  if (result.cleanup) {
+    lines.push("", "Cleanup:");
+    lines.push(`- Attempted: ${yesNo(result.cleanup.attempted)}`);
+    if (result.cleanup.commands.length > 0) {
+      for (const command of result.cleanup.commands) {
+        lines.push(`- ${command}`);
+      }
+    }
+    if (typeof result.cleanup.success === "boolean") {
+      lines.push(`- Success: ${yesNo(result.cleanup.success)}`);
+    }
+    if (result.cleanup.error) {
+      lines.push(`- Error: ${result.cleanup.error}`);
+    }
+  }
+
   if (result.error) {
     lines.push("", `Error: ${result.error}`);
   }
@@ -219,7 +235,7 @@ async function runSupabaseLogin(options: ConnectOptions) {
     diagnostics,
     nextSteps:
       diagnostics?.account.status === "authenticated"
-        ? ["Run mint connect supabase --create"]
+        ? ["Stage Supabase with mint connect supabase --create"]
         : result.exitCode === 0
           ? ["Run mint connect supabase to inspect login state", "Retry mint connect supabase --login if needed"]
           : ["Retry mint connect supabase --login"],
@@ -237,7 +253,7 @@ export function connectCommand(): Command {
     .option("--db-password <password>", "Supabase database password for linking or project creation.")
     .option("--login", "Connect the Supabase CLI to your account.")
     .option("--no-browser", "Do not open a browser for Supabase login.")
-    .option("--create", "Create a new Supabase project and configure env files.")
+    .option("--create", "Stage Supabase project creation for the all-provider apply phase.")
     .option("--project-name <name>", "Name for a new Supabase project.")
     .option("--org-id <id>", "Supabase organization id or slug to create the project in.")
     .option("--region <region>", "Supabase region for new projects.", "us-east-1")

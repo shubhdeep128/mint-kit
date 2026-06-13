@@ -39,25 +39,25 @@ function createIntegratedStack(): ProviderCheck[] {
       key: "supabase",
       label: "Supabase",
       status: "next",
-      detail: "Mint will create a project, link it, and write env",
+      detail: "Mint will stage project settings before apply",
     },
     {
       key: "revenuecat",
       label: "RevenueCat",
       status: "next",
-      detail: "Mint will connect payments and SDK keys",
+      detail: "Mint will stage products and SDK keys before apply",
     },
     {
       key: "posthog",
       label: "PostHog",
       status: "next",
-      detail: "Mint will connect analytics and SDK keys",
+      detail: "Mint will stage analytics settings before apply",
     },
     {
       key: "eas",
       label: "EAS",
       status: "next",
-      detail: "Mint will configure builds after app metadata",
+      detail: "Mint will stage build config before apply",
     },
   ];
 }
@@ -108,9 +108,10 @@ export function createNewFlowModel(appName: string, localChecks: ProviderCheck[]
     steps: connect
       ? [
           {label: "Create app shell", status: "active"},
-          {label: "Provision Supabase", status: "next"},
-          {label: "Connect RevenueCat", status: "next"},
-          {label: "Connect PostHog", status: "next"},
+          {label: "Collect provider access", status: "next"},
+          {label: "Validate every provider", status: "next"},
+          {label: "Apply resources together", status: "next"},
+          {label: "Rollback on failure", status: "next"},
           {label: "Run doctor", status: "next"},
           {label: "Ship build", status: "next"},
         ]
