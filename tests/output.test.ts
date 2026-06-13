@@ -24,9 +24,16 @@ describe("renderers", () => {
     expect(JSON.parse(output)).toMatchObject({appName: "dream-coach"});
   });
 
-  it("renders text with repair commands", () => {
+  it("renders default new flow as integrated provisioning", () => {
     const output = renderText(createNewFlowModel("dream-coach"));
     expect(output).toContain("Mint");
+    expect(output).toContain("Provision Supabase");
+    expect(output).toContain("Mint will create a project");
+    expect(output).not.toContain("mint connect");
+  });
+
+  it("renders repair commands when connect is disabled", () => {
+    const output = renderText(createNewFlowModel("dream-coach", [], {connect: false}));
     expect(output).toContain("mint connect");
   });
 });

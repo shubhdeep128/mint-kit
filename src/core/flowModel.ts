@@ -28,51 +28,103 @@ export type MintFlowModel = {
   nextCommand?: string;
 };
 
-export function createNewFlowModel(appName: string, localChecks: ProviderCheck[] = []): MintFlowModel {
-  return {
+type NewFlowOptions = {
+  connect?: boolean | undefined;
+};
+
+function createIntegratedStack(): ProviderCheck[] {
+  return [
+    {key: "expo", label: "Expo SDK 56", status: "ok", detail: "Pinned template target"},
+    {
+      key: "supabase",
+      label: "Supabase",
+      status: "next",
+      detail: "Mint will create a project, link it, and write env",
+    },
+    {
+      key: "revenuecat",
+      label: "RevenueCat",
+      status: "next",
+      detail: "Mint will connect payments and SDK keys",
+    },
+    {
+      key: "posthog",
+      label: "PostHog",
+      status: "next",
+      detail: "Mint will connect analytics and SDK keys",
+    },
+    {
+      key: "eas",
+      label: "EAS",
+      status: "next",
+      detail: "Mint will configure builds after app metadata",
+    },
+  ];
+}
+
+function createRepairStack(): ProviderCheck[] {
+  return [
+    {key: "expo", label: "Expo SDK 56", status: "ok", detail: "Pinned template target"},
+    {
+      key: "supabase",
+      label: "Supabase",
+      status: "missing",
+      detail: "Connection required",
+      repairCommand: "mint connect supabase",
+    },
+    {
+      key: "revenuecat",
+      label: "RevenueCat",
+      status: "missing",
+      detail: "API key required",
+      repairCommand: "mint connect revenuecat",
+    },
+    {
+      key: "posthog",
+      label: "PostHog",
+      status: "missing",
+      detail: "Project token required",
+      repairCommand: "mint connect posthog",
+    },
+    {
+      key: "eas",
+      label: "EAS",
+      status: "next",
+      detail: "Configured after app creation",
+      repairCommand: "mint connect expo",
+    },
+  ];
+}
+
+export function createNewFlowModel(appName: string, localChecks: ProviderCheck[] = [], options: NewFlowOptions = {}): MintFlowModel {
+  const connect = options.connect ?? true;
+  const model: MintFlowModel = {
     productName: "Mint",
     command: "new",
     appName,
     title: appName,
     subtitle: "Expo SDK 56 | Supabase | RevenueCat | PostHog | EAS",
-    stack: [
-      ...localChecks,
-      {key: "expo", label: "Expo SDK 56", status: "ok", detail: "Pinned template target"},
-      {
-        key: "supabase",
-        label: "Supabase",
-        status: "missing",
-        detail: "Connection required",
-        repairCommand: "mint connect supabase",
-      },
-      {
-        key: "revenuecat",
-        label: "RevenueCat",
-        status: "missing",
-        detail: "API key required",
-        repairCommand: "mint connect revenuecat",
-      },
-      {
-        key: "posthog",
-        label: "PostHog",
-        status: "missing",
-        detail: "Project token required",
-        repairCommand: "mint connect posthog",
-      },
-      {
-        key: "eas",
-        label: "EAS",
-        status: "next",
-        detail: "Configured after app creation",
-        repairCommand: "mint connect expo",
-      },
-    ],
-    steps: [
-      {label: "Create app shell", status: "active"},
-      {label: "Connect services", status: "next"},
-      {label: "Run doctor", status: "next"},
-      {label: "Ship build", status: "next"},
-    ],
-    nextCommand: "mint connect",
+    stack: [...localChecks, ...(connect ? createIntegratedStack() : createRepairStack())],
+    steps: connect
+      ? [
+          {label: "Create app shell", status: "active"},
+          {label: "Provision Supabase", status: "next"},
+          {label: "Connect RevenueCat", status: "next"},
+          {label: "Connect PostHog", status: "next"},
+          {label: "Run doctor", status: "next"},
+          {label: "Ship build", status: "next"},
+        ]
+      : [
+          {label: "Create app shell", status: "active"},
+          {label: "Leave services repairable", status: "next"},
+          {label: "Run doctor", status: "next"},
+          {label: "Ship build", status: "next"},
+        ],
   };
+
+  if (!connect) {
+    model.nextCommand = "mint connect";
+  }
+
+  return model;
 }

@@ -13,6 +13,7 @@ type NewOptions = {
   json?: boolean;
   dryRun?: boolean;
   plain?: boolean;
+  connect?: boolean;
 };
 
 export function newCommand(): Command {
@@ -22,9 +23,10 @@ export function newCommand(): Command {
     .option("--json", "Render machine-readable output.")
     .option("--dry-run", "Show the planned setup without writing files.")
     .option("--plain", "Disable Ink and render plain text.")
+    .option("--no-connect", "Create only and leave service setup for mint connect.")
     .action(async (appName: string, options: NewOptions) => {
       const localChecks = options.dryRun ? [] : await runLocalPreflight(execaCommandRunner);
-      const model = createNewFlowModel(appName, localChecks);
+      const model = createNewFlowModel(appName, localChecks, {connect: options.connect});
       const mode = chooseOutputMode({
         json: options.json,
         interactive: options.plain ? false : undefined,

@@ -24,6 +24,20 @@ describe("mint cli", () => {
     const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
     expect(output).toContain("Mint");
     expect(output).toContain("dream-coach");
+    expect(output).toContain("Provision Supabase");
+    expect(output).not.toContain("Next: mint connect");
+
+    write.mockRestore();
+  });
+
+  it("supports creating without the integrated connect flow", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli(["node", "mint", "new", "dream-coach", "--dry-run", "--plain", "--no-connect"]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(output).toContain("Leave services repairable");
+    expect(output).toContain("Next: mint connect");
 
     write.mockRestore();
   });

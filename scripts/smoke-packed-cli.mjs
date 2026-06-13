@@ -1,5 +1,6 @@
 import {execFileSync} from "node:child_process";
-import {existsSync, mkdirSync, readdirSync, rmSync} from "node:fs";
+import {existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync} from "node:fs";
+import {tmpdir} from "node:os";
 import {join, resolve} from "node:path";
 
 const root = resolve(new URL("..", import.meta.url).pathname);
@@ -24,14 +25,37 @@ if (!tarball) {
 
 const tarballPath = join(artifactsDir, tarball);
 
-execFileSync("pnpm", ["dlx", tarballPath, "new", "package-smoke", "--dry-run", "--json"], {
-  cwd: root,
-  env: {...process.env, MINT_TEST_MODE: "1", CI: "1"},
-  stdio: "inherit",
-});
+function assertIntegratedNewOutput(output, label) {
+  if (!output.includes("Mint will create a project") || !output.includes("Provision Supabase")) {
+    throw new Error(`${label} did not run the integrated Mint new flow:\n${output}`);
+  }
 
-execFileSync("npx", ["--yes", "--package", tarballPath, "mint", "new", "package-smoke", "--dry-run", "--plain"], {
+  if (output.includes('"status": "missing"') || output.includes("Next: mint connect")) {
+    throw new Error(`${label} ran the repair-only Mint new flow:\n${output}`);
+  }
+}
+
+const pnpmTemp = mkdtempSync(join(tmpdir(), "mint-pnpm-dlx-"));
+const pnpmOutput = execFileSync("pnpm", ["dlx", "--package", tarballPath, "mint", "new", "package-smoke", "--dry-run", "--json"], {
+  cwd: root,
+  env: {
+    ...process.env,
+    MINT_TEST_MODE: "1",
+    CI: "1",
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    NPM_CONFIG_STORE_DIR: join(pnpmTemp, "store"),
+    PNPM_HOME: join(pnpmTemp, "home"),
+    XDG_CACHE_HOME: join(pnpmTemp, "cache"),
+  },
+  encoding: "utf8",
+});
+process.stdout.write(pnpmOutput);
+assertIntegratedNewOutput(pnpmOutput, "pnpm dlx");
+
+const npxOutput = execFileSync("npx", ["--yes", "--package", tarballPath, "mint", "new", "package-smoke", "--dry-run", "--plain"], {
   cwd: root,
   env: {...process.env, MINT_TEST_MODE: "1", CI: "1"},
-  stdio: "inherit",
+  encoding: "utf8",
 });
+process.stdout.write(npxOutput);
+assertIntegratedNewOutput(npxOutput, "npx");

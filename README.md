@@ -9,11 +9,19 @@ pnpm dlx @usemint/cli@latest new dream-coach
 npx @usemint/cli@latest new dream-coach
 ```
 
+`mint new` is the happy path: it creates the app shell and then walks through service provisioning. `mint connect` is for repair, resume, or connecting services later.
+
 After global install:
 
 ```bash
 pnpm add -g @usemint/cli
 mint new dream-coach
+```
+
+To create only the local shell and leave services for later:
+
+```bash
+mint new dream-coach --no-connect
 ```
 
 ## Local Verification

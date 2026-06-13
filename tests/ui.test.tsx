@@ -4,12 +4,13 @@ import {createNewFlowModel} from "../src/core/flowModel.js";
 import {MintInteractiveApp} from "../src/ui/MintInteractiveApp.js";
 
 describe("MintInteractiveApp", () => {
-  it("renders stack and next command", () => {
+  it("renders the integrated new flow", () => {
     const {lastFrame} = render(<MintInteractiveApp model={createNewFlowModel("dream-coach")} />);
 
     expect(lastFrame()).toContain("Mint");
     expect(lastFrame()).toContain("dream-coach");
     expect(lastFrame()).toContain("Supabase");
-    expect(lastFrame()).toContain("mint connect");
+    expect(lastFrame()).toContain("Provision Supabase");
+    expect(lastFrame()).not.toContain("mint connect");
   });
 });
