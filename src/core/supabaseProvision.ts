@@ -79,6 +79,12 @@ export type SupabaseProvisionInput = {
   apply?: boolean | undefined;
   allProvidersConfigured?: boolean | undefined;
   cleanupOnFailure?: boolean | undefined;
+  onProgress?: ((progress: SupabaseProvisionProgress) => void) | undefined;
+};
+
+export type SupabaseProvisionProgress = {
+  label: string;
+  detail?: string | undefined;
 };
 
 type SupabaseCliDetection = Awaited<ReturnType<typeof detectSupabaseCli>>;
@@ -94,6 +100,10 @@ type SupabaseApiKey = {
 const dashboardUrl = "https://supabase.com/dashboard";
 const defaultRegion = "us-east-1";
 const defaultSize = "nano";
+
+function reportProgress(input: SupabaseProvisionInput, label: string, detail?: string): void {
+  input.onProgress?.({label, detail});
+}
 
 function generatedDatabasePassword(): string {
   return `${randomBytes(24).toString("base64url")}aA1!`;
@@ -307,6 +317,7 @@ async function cleanupSupabaseProject(runner: CommandRunner, mode: SupabaseCliMo
 }
 
 export async function provisionSupabaseProject(input: SupabaseProvisionInput): Promise<SupabaseProvisionResult> {
+  reportProgress(input, "Checking Supabase CLI", "Detecting direct CLI or npx fallback.");
   const cli = await detectSupabaseCli(input.runner);
   const base = createBase(cli);
   const projectName = input.projectName?.trim() || projectNameFromRoot(input.projectRoot);
@@ -328,6 +339,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
     };
   }
 
+  reportProgress(input, "Planning Supabase project", `Project ${projectName} in ${region} (${size}).`);
   const plannedOrg = input.orgId?.trim() || "<selected-org>";
   const createArgs = [
     "projects",
@@ -348,6 +360,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   const createDisplayArgs = createArgs.map((arg, index) => (createArgs[index - 1] === "--db-password" ? "********" : arg));
 
   if (input.dryRun) {
+    reportProgress(input, "Dry-run Supabase apply", "Rendering planned commands without creating resources.");
     const projectRef = "<created-project-ref>";
     return {
       ...base,
@@ -406,6 +419,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   const warnings: string[] = [];
 
   if (!orgId) {
+    reportProgress(input, "Listing Supabase organizations", "Mint will auto-select only when exactly one org exists.");
     const orgs = await listOrganizations(input.runner, cli.mode);
     commands.push(orgs.invocation.display);
 
@@ -438,6 +452,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
 
     organization = orgs.organizations[0]!;
     orgId = orgFlagValue(organization);
+    reportProgress(input, "Selected Supabase organization", organization.name);
   }
 
   const resolvedCreateArgs = createArgs.map(arg => (arg === plannedOrg ? orgId ?? plannedOrg : arg));
@@ -445,6 +460,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   const createInvocation = buildSupabaseInvocation(cli.mode, resolvedCreateArgs, resolvedDisplayArgs);
   commands.push(createInvocation.display);
 
+  reportProgress(input, "Creating Supabase project", createInvocation.display);
   const createResult = await input.runner.run(createInvocation.command, createInvocation.args);
 
   if (createResult.exitCode !== 0) {
@@ -475,9 +491,11 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
     };
   }
 
+  reportProgress(input, "Supabase project created", project.ref);
   let linked = false;
 
   if (shouldLink) {
+    reportProgress(input, "Linking Supabase project", `Project ref ${project.ref}.`);
     const linkResult = await connectSupabase({
       projectRef: project.ref,
       dbPassword,
@@ -510,6 +528,7 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
     }
   }
 
+  reportProgress(input, "Fetching Supabase API keys", `Project ref ${project.ref}.`);
   const apiKeys = await fetchApiKeys(input.runner, cli.mode, project.ref);
   commands.push(apiKeys.invocation.display);
 
@@ -540,19 +559,21 @@ export async function provisionSupabaseProject(input: SupabaseProvisionInput): P
   let serverEnv: EnvWriteResult | undefined;
 
   try {
+    reportProgress(input, "Writing Supabase env", envFile);
     expoEnv = await upsertEnvFile(input.projectRoot, envFile, {
       EXPO_PUBLIC_SUPABASE_URL: url,
       EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: apiKeys.keys.publishableKey,
       EXPO_PUBLIC_SUPABASE_ANON_KEY: apiKeys.keys.publishableKey,
     });
-    serverEnv = input.serverEnvFile
-      ? await upsertEnvFile(input.projectRoot, input.serverEnvFile, {
-          SUPABASE_URL: url,
-          SUPABASE_PROJECT_REF: project.ref,
-          SUPABASE_SECRET_KEY: apiKeys.keys.secretKey,
-          SUPABASE_SERVICE_ROLE_KEY: apiKeys.keys.serviceRoleKey,
-        })
-      : undefined;
+    if (input.serverEnvFile) {
+      reportProgress(input, "Writing Supabase server env", input.serverEnvFile);
+      serverEnv = await upsertEnvFile(input.projectRoot, input.serverEnvFile, {
+        SUPABASE_URL: url,
+        SUPABASE_PROJECT_REF: project.ref,
+        SUPABASE_SECRET_KEY: apiKeys.keys.secretKey,
+        SUPABASE_SERVICE_ROLE_KEY: apiKeys.keys.serviceRoleKey,
+      });
+    }
   } catch (error) {
     const cleanup = shouldCleanup ? await cleanupSupabaseProject(input.runner, cli.mode, project.ref) : undefined;
 

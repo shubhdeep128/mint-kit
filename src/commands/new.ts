@@ -22,6 +22,11 @@ type NewOptions = {
   connect?: boolean;
 };
 
+type ApplyProgress = {
+  label: string;
+  detail?: string | undefined;
+};
+
 async function validateSetupProvider(provider: ProviderKey) {
   const projectRoot = process.cwd();
 
@@ -67,8 +72,9 @@ async function validateSetupProvider(provider: ProviderKey) {
   };
 }
 
-async function applySetup(appName: string, options: NewOptions) {
+async function applySetup(appName: string, options: NewOptions, onProgress: (progress: ApplyProgress) => void) {
   const projectRoot = process.cwd();
+  onProgress({label: "Checking existing Mint state", detail: ".mint/connect-state.json and .env.local"});
   const state = await readConnectState(projectRoot);
   const envValues = await readEnvFileValues(projectRoot, ".env.local");
   const supabaseAlreadyApplied =
@@ -76,6 +82,7 @@ async function applySetup(appName: string, options: NewOptions) {
     Boolean(envValues.EXPO_PUBLIC_SUPABASE_URL);
 
   if (supabaseAlreadyApplied) {
+    onProgress({label: "Supabase already applied", detail: envValues.EXPO_PUBLIC_SUPABASE_URL});
     return {
       ok: true,
       message: "Mint setup is already applied for this workspace.",
@@ -84,6 +91,7 @@ async function applySetup(appName: string, options: NewOptions) {
     };
   }
 
+  onProgress({label: "Applying Supabase", detail: "Creating project, linking locally, and writing env files."});
   const result = await provisionSupabaseProject({
     projectRoot,
     runner: execaCommandRunner,
@@ -92,9 +100,15 @@ async function applySetup(appName: string, options: NewOptions) {
     apply: true,
     allProvidersConfigured: true,
     dryRun: options.dryRun,
+    onProgress: progress =>
+      onProgress({
+        label: `Supabase: ${progress.label}`,
+        detail: progress.detail,
+      }),
   });
 
   if (result.connected) {
+    onProgress({label: "Recording Supabase state", detail: result.project?.ref});
     await markProvider(projectRoot, "supabase", "connected", {
       projectRef: result.project?.ref,
       envFile: result.env.expo?.path,
@@ -147,7 +161,7 @@ export function newCommand(): Command {
           createElement(MintInteractiveApp, {
             model,
             validateProvider: validateSetupProvider,
-            applySetup: () => applySetup(appName, options),
+            applySetup: onProgress => applySetup(appName, options, onProgress),
           }),
         );
         return;

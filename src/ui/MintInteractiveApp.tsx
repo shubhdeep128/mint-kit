@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import {StatusMessage} from "@inkjs/ui";
+import {Spinner, StatusMessage} from "@inkjs/ui";
 import {Box, Text, useApp, useInput} from "ink";
 import {mintCommand} from "../core/commandDisplay.js";
 import type {MintFlowModel, ProviderKey} from "../core/flowModel.js";
@@ -18,10 +18,15 @@ type ApplyResult = {
   nextSteps?: string[] | undefined;
 };
 
+type ApplyProgress = {
+  label: string;
+  detail?: string | undefined;
+};
+
 type Props = {
   model: MintFlowModel;
   validateProvider?: (provider: ProviderKey) => Promise<ValidationResult>;
-  applySetup?: () => Promise<ApplyResult>;
+  applySetup?: (onProgress: (progress: ApplyProgress) => void) => Promise<ApplyResult>;
 };
 
 type ProviderStatus = "waiting" | "checking" | "ready" | "needs_action";
@@ -121,22 +126,54 @@ export function MintInteractiveApp({model, validateProvider, applySetup}: Props)
   const [statuses, setStatuses] = useState<Record<ProviderKey, ProviderStatus>>(() => defaultStatusMap());
   const [messages, setMessages] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("Checking provider connections...");
+  const [activity, setActivity] = useState<ApplyProgress>({label: "Checking provider connections"});
+  const [phaseStartedAt, setPhaseStartedAt] = useState(() => Date.now());
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [applyResult, setApplyResult] = useState<ApplyResult | undefined>();
   const activeProvider = setupProviders[activeIndex]!;
 
+  useEffect(() => {
+    if (phase !== "validating" && phase !== "applying") {
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - phaseStartedAt) / 1000)));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [phase, phaseStartedAt]);
+
   async function runApply() {
     setPhase("applying");
+    setPhaseStartedAt(Date.now());
+    setElapsedSeconds(0);
     setApplyResult(undefined);
     setMessage("Applying Mint setup...");
+    setActivity({label: "Starting apply", detail: "Preparing provider resource setup."});
 
-    const result = applySetup
-      ? await applySetup()
-      : {
-          ok: true,
-          message: "Provider access validated. Apply automation is not wired in this command yet.",
-          details: ["No provider resources were created."],
-          nextSteps: ["Run mint doctor"],
+    const result = await (async () => {
+      try {
+        return applySetup
+          ? await applySetup(progress => {
+              setActivity(progress);
+              setMessage(progress.detail ? `${progress.label}: ${progress.detail}` : progress.label);
+            })
+          : {
+              ok: true,
+              message: "Provider access validated. Apply automation is not wired in this command yet.",
+              details: ["No provider resources were created."],
+              nextSteps: ["Run mint doctor"],
+            };
+      } catch (error) {
+        return {
+          ok: false,
+          message: "Apply crashed before Mint could finish.",
+          details: [error instanceof Error ? error.message : "Unknown apply failure"],
+          nextSteps: ["Run mint doctor", "Retry mint new after fixing the error above"],
         };
+      }
+    })();
 
     setApplyResult(result);
     setPhase(result.ok ? "complete" : "apply_failed");
@@ -145,7 +182,10 @@ export function MintInteractiveApp({model, validateProvider, applySetup}: Props)
 
   async function validateProviders(providers: SetupProvider[]) {
     setPhase("validating");
+    setPhaseStartedAt(Date.now());
+    setElapsedSeconds(0);
     setMessage("Checking provider connections...");
+    setActivity({label: "Checking provider connections", detail: "Mint is validating every provider in parallel."});
     setApplyResult(undefined);
     setStatuses(current => {
       const next = {...current};
@@ -305,7 +345,9 @@ export function MintInteractiveApp({model, validateProvider, applySetup}: Props)
         ) : phase === "applying" ? (
           <Box flexDirection="column">
             <Text bold>Apply</Text>
-            <Text>{message}</Text>
+            <Spinner label={activity.label} />
+            {activity.detail ? <Text color={theme.muted}>{activity.detail}</Text> : null}
+            <Text color={theme.muted}>Elapsed: {elapsedSeconds}s</Text>
             <Text color={theme.muted}>Mint is creating/configuring resources. Do not close this terminal.</Text>
           </Box>
         ) : phase === "apply_failed" ? (
@@ -346,7 +388,9 @@ export function MintInteractiveApp({model, validateProvider, applySetup}: Props)
         ) : (
           <Box flexDirection="column">
             <Text bold>Validate</Text>
-            <Text>{message}</Text>
+            <Spinner label={activity.label} />
+            {activity.detail ? <Text color={theme.muted}>{activity.detail}</Text> : null}
+            <Text color={theme.muted}>Elapsed: {elapsedSeconds}s</Text>
             <Text color={theme.muted}>Mint is checking every provider automatically.</Text>
           </Box>
         )}

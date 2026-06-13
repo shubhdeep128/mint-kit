@@ -3,4 +3,6 @@ dist/
 artifacts/
 .mint/
 .env.local
+server/.env
+supabase/.temp/
 .DS_Store
