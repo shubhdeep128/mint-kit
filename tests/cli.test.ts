@@ -93,4 +93,39 @@ describe("mint cli", () => {
 
     write.mockRestore();
   });
+
+  it("shows the supabase create plan in dry-run mode", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await runMintCli([
+      "node",
+      "mint",
+      "connect",
+      "supabase",
+      "--create",
+      "--project-name",
+      "dream-coach",
+      "--org-id",
+      "cool-green-pqdr0qc",
+      "--db-password",
+      "super-secret-password",
+      "--dry-run",
+      "--json",
+    ]);
+
+    const output = write.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(JSON.parse(output)).toMatchObject({
+      command: "connect",
+      service: "supabase",
+      result: {
+        status: "ready_to_create",
+        connected: false,
+      },
+    });
+    expect(output).toContain("supabase projects create dream-coach");
+    expect(output).toContain("--db-password ********");
+    expect(output).not.toContain("super-secret-password");
+
+    write.mockRestore();
+  });
 });

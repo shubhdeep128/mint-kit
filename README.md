@@ -24,19 +24,37 @@ pnpm verify
 
 ## Supabase Connect
 
-Inspect what Mint needs:
+Connect the Supabase CLI to your account:
 
 ```bash
-mint connect supabase
+mint connect supabase --login
 ```
 
-Link an existing Supabase project:
+Create a Supabase project, link it locally, fetch API keys, and write Expo env:
+
+```bash
+mint connect supabase --create
+```
+
+Dry-run the exact commands first:
+
+```bash
+mint connect supabase --create --project-name dream-coach --org-id your-org-slug --dry-run
+```
+
+Mint uses `supabase` when the CLI is available and falls back to `npx --yes supabase` otherwise. The create flow runs `projects create`, links the created project, fetches project API keys, writes `.env.local`, and records Supabase in `.mint/connect-state.json`.
+
+If your Supabase account has multiple organizations, pass the organization explicitly:
+
+```bash
+mint connect supabase --create --org-id your-org-slug
+```
+
+To link an existing Supabase project instead of creating one:
 
 ```bash
 mint connect supabase --project-ref your-project-ref
 ```
-
-Mint runs `supabase link --project-ref <ref>` when the Supabase CLI is available. If it is not available directly, Mint falls back to `npx --yes supabase link --project-ref <ref>`. It writes `.mint/connect-state.json` only after the link command succeeds.
 
 ## Publishing
 

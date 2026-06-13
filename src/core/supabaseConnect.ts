@@ -25,25 +25,50 @@ export type SupabaseConnectResult = {
 
 export type SupabaseConnectInput = {
   projectRef?: string | undefined;
+  dbPassword?: string | undefined;
   runner: CommandRunner;
   dryRun?: boolean | undefined;
 };
 
 const dashboardUrl = "https://supabase.com/dashboard";
 
-function buildLinkInvocation(mode: SupabaseCliMode, projectRef: string) {
+export function buildSupabaseInvocation(mode: SupabaseCliMode, args: string[], displayArgs = args) {
   if (mode === "direct") {
     return {
       command: "supabase",
-      args: ["link", "--project-ref", projectRef],
-      display: `supabase link --project-ref ${projectRef}`,
+      args,
+      display: `supabase ${displayArgs.join(" ")}`,
     };
   }
 
   return {
     command: "npx",
-    args: ["--yes", "supabase", "link", "--project-ref", projectRef],
-    display: `npx --yes supabase link --project-ref ${projectRef}`,
+    args: ["--yes", "supabase", ...args],
+    display: `npx --yes supabase ${displayArgs.join(" ")}`,
+  };
+}
+
+export function buildLinkInvocation(mode: SupabaseCliMode, projectRef: string, dbPassword?: string | undefined) {
+  const args = ["link", "--project-ref", projectRef];
+  const displayArgs = [...args];
+
+  if (dbPassword) {
+    args.push("--password", dbPassword);
+    displayArgs.push("--password", "********");
+  }
+
+  if (mode === "direct") {
+    return {
+      command: "supabase",
+      args,
+      display: `supabase ${displayArgs.join(" ")}`,
+    };
+  }
+
+  return {
+    command: "npx",
+    args: ["--yes", "supabase", ...args],
+    display: `npx --yes supabase ${displayArgs.join(" ")}`,
   };
 }
 
@@ -71,7 +96,7 @@ export async function connectSupabase(input: SupabaseConnectInput): Promise<Supa
   const cli = await detectSupabaseCli(input.runner);
   const projectRef = input.projectRef?.trim();
   const invocation = projectRef
-    ? buildLinkInvocation(cli.mode, projectRef)
+    ? buildLinkInvocation(cli.mode, projectRef, input.dbPassword)
     : buildLinkInvocation(cli.mode, "<project-ref>");
 
   const base = {
@@ -102,11 +127,11 @@ export async function connectSupabase(input: SupabaseConnectInput): Promise<Supa
       ...base,
       status: "needs_project_ref",
       connected: false,
-      message: "No Supabase project ref was provided, so Mint has not linked a project yet.",
+      message: "No Supabase project was selected, so Mint has not linked or provisioned anything yet.",
       nextSteps: [
-        "Run supabase login or npx --yes supabase login",
-        "Find your project ref in the Supabase dashboard",
-        "Run mint connect supabase --project-ref <project-ref>",
+        "Run mint connect supabase --login",
+        "Create and configure a project with mint connect supabase --create",
+        "Or link an existing project with mint connect supabase --project-ref <project-ref>",
       ],
     };
   }

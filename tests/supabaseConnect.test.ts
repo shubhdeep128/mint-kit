@@ -1,6 +1,10 @@
+import {mkdtemp, readFile} from "node:fs/promises";
+import {join} from "node:path";
+import {tmpdir} from "node:os";
 import {describe, expect, it} from "vitest";
 import type {CommandRunner} from "../src/core/commandRunner.js";
 import {connectSupabase, detectSupabaseCli} from "../src/core/supabaseConnect.js";
+import {provisionSupabaseProject} from "../src/core/supabaseProvision.js";
 
 function runner(responses: Record<string, {exitCode: number; stdout?: string; stderr?: string}>): CommandRunner {
   return {
@@ -89,5 +93,103 @@ describe("connectSupabase", () => {
       connected: false,
       error: "not logged in",
     });
+  });
+});
+
+describe("provisionSupabaseProject", () => {
+  it("shows a redacted create plan in dry-run mode", async () => {
+    const result = await provisionSupabaseProject({
+      projectRoot: "/tmp/dream-coach",
+      projectName: "dream-coach",
+      orgId: "cool-green-pqdr0qc",
+      dbPassword: "super-secret-password",
+      runner: runner({
+        "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+      }),
+      dryRun: true,
+    });
+
+    expect(result).toMatchObject({
+      status: "ready_to_create",
+      connected: false,
+    });
+    expect(result.commands.join("\n")).toContain("supabase projects create dream-coach");
+    expect(result.commands.join("\n")).toContain("--db-password ********");
+    expect(result.commands.join("\n")).not.toContain("super-secret-password");
+  });
+
+  it("requires explicit org selection when the account has multiple orgs", async () => {
+    const result = await provisionSupabaseProject({
+      projectRoot: "/tmp/dream-coach",
+      projectName: "dream-coach",
+      runner: runner({
+        "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+        "supabase orgs list --output-format json": {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            {id: "org-one", slug: "org-one", name: "One"},
+            {id: "org-two", slug: "org-two", name: "Two"},
+          ]),
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "needs_org_selection",
+      connected: false,
+      organizations: [
+        {name: "One", slug: "org-one"},
+        {name: "Two", slug: "org-two"},
+      ],
+    });
+  });
+
+  it("creates, links, fetches keys, and writes env files", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "mint-supabase-"));
+    const projectRef = "abcdefghijklmnopqrst";
+    const result = await provisionSupabaseProject({
+      projectRoot,
+      projectName: "dream-coach",
+      orgId: "cool-green-pqdr0qc",
+      dbPassword: "test-password",
+      serverEnvFile: "server/.env",
+      runner: runner({
+        "supabase --version": {exitCode: 0, stdout: "2.106.0"},
+        "supabase projects create dream-coach --org-id cool-green-pqdr0qc --db-password test-password --region us-east-1 --size nano --yes --output-format json": {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            ref: projectRef,
+            name: "dream-coach",
+            organization_slug: "cool-green-pqdr0qc",
+            region: "us-east-1",
+            status: "COMING_UP",
+          }),
+        },
+        "supabase link --project-ref abcdefghijklmnopqrst --password test-password": {exitCode: 0, stdout: "Linked project"},
+        "supabase projects api-keys --project-ref abcdefghijklmnopqrst --output-format json": {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            {type: "publishable", name: "publishable_key", api_key: "sb_publishable_123"},
+            {type: "secret", name: "server_secret", api_key: "sb_secret_456"},
+          ]),
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "provisioned",
+      connected: true,
+      project: {ref: projectRef},
+    });
+
+    const expoEnv = await readFile(join(projectRoot, ".env.local"), "utf8");
+    expect(expoEnv).toContain("EXPO_PUBLIC_SUPABASE_URL=https://abcdefghijklmnopqrst.supabase.co");
+    expect(expoEnv).toContain("EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_123");
+    expect(expoEnv).toContain("EXPO_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_123");
+
+    const serverEnv = await readFile(join(projectRoot, "server/.env"), "utf8");
+    expect(serverEnv).toContain("SUPABASE_SECRET_KEY=sb_secret_456");
+    expect(JSON.stringify(result)).not.toContain("test-password");
+    expect(JSON.stringify(result)).not.toContain("sb_secret_456");
   });
 });

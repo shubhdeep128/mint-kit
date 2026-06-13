@@ -15,7 +15,7 @@ export const execaCommandRunner: CommandRunner = {
     try {
       const result = await execa(command, args, {reject: false});
       return {
-        exitCode: result.exitCode ?? 0,
+        exitCode: result.exitCode ?? (result.failed ? 1 : 0),
         stdout: result.stdout,
         stderr: result.stderr,
       };

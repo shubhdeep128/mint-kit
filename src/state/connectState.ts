@@ -7,6 +7,7 @@ const providerStateSchema = z.object({
   key: z.enum(["expo", "supabase", "revenuecat", "posthog", "eas"]),
   status: z.enum(["connected", "skipped", "missing"]),
   updatedAt: z.string(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
 const connectStateSchema = z.object({
@@ -46,10 +47,11 @@ export async function markProvider(
   projectRoot: string,
   key: ProviderKey,
   status: "connected" | "skipped" | "missing",
+  metadata?: Record<string, unknown> | undefined,
 ): Promise<ConnectState> {
   const state = await readConnectState(projectRoot);
   const providers = state.providers.filter(provider => provider.key !== key);
-  providers.push({key, status, updatedAt: new Date().toISOString()});
+  providers.push({key, status, updatedAt: new Date().toISOString(), metadata});
   const nextState = {version: 1 as const, providers};
   await writeConnectState(projectRoot, nextState);
   return nextState;
