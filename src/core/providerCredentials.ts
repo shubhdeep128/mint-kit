@@ -182,12 +182,12 @@ export async function connectCredentialProvider(
     provider: spec.key,
     status: "connected",
     connected: true,
-    message: `${spec.label} credentials saved. Return to mint new and press Enter to validate.`,
+    message: `${spec.label} credentials saved. Mint will validate them automatically during setup.`,
     env,
     state,
     statePath: connectStatePath(projectRoot),
     variables: env.variables,
     missing: [],
-    nextSteps: ["Return to the setup flow", "Press Enter to validate this provider"],
+    nextSteps: ["Run mint new <app-name> to continue setup", "Run mint doctor to inspect this workspace"],
   };
 }

@@ -46,28 +46,28 @@ const setupProviders: SetupProvider[] = [
     label: "Supabase",
     need: "A logged-in Supabase account. Mint will create the project later, after every provider validates.",
     commandArgs: "connect supabase --login",
-    validate: "After login succeeds, come back here and press Enter.",
+    validate: "After login succeeds, Mint can recheck this provider.",
   },
   {
     key: "revenuecat",
     label: "RevenueCat",
     need: "RevenueCat API access and app SDK keys.",
     commandArgs: "connect revenuecat",
-    validate: "After the connector succeeds, come back here and press Enter.",
+    validate: "After the connector succeeds, Mint can recheck this provider.",
   },
   {
     key: "posthog",
     label: "PostHog",
     need: "PostHog project access and client token.",
     commandArgs: "connect posthog",
-    validate: "After the connector succeeds, come back here and press Enter.",
+    validate: "After the connector succeeds, Mint can recheck this provider.",
   },
   {
     key: "eas",
     label: "Expo/EAS",
     need: "Expo account access for builds, credentials, and store submission.",
     commandArgs: "connect expo",
-    validate: "After Expo login succeeds, come back here and press Enter.",
+    validate: "After Expo login succeeds, Mint can recheck this provider.",
   },
 ];
 

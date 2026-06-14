@@ -30,7 +30,7 @@ export function normalizeAppSlug(value: string): string {
 }
 
 export function createBundleIdentifier(value: string): string {
-  return `com.usemint.${normalizeAppSlug(value).replace(/-/g, "")}`;
+  return `com.mintkit.${normalizeAppSlug(value).replace(/-/g, "")}`;
 }
 
 async function writeProjectFile(root: string, filePath: string, content: string): Promise<string> {
@@ -62,6 +62,7 @@ export async function scaffoldMintApp(input: AppScaffoldInput): Promise<AppScaff
     name: packageName,
     version: "0.1.0",
     private: true,
+    type: "module",
     scripts: {
       start: "expo start",
       android: "expo start --android",
@@ -90,9 +91,9 @@ export async function scaffoldMintApp(input: AppScaffoldInput): Promise<AppScaff
       "expo-splash-screen": "latest",
       "expo-status-bar": "latest",
       hono: "latest",
-      posthog: "latest",
       "posthog-react-native": "latest",
       react: "latest",
+      "react-dom": "latest",
       "react-native": "latest",
       "react-native-purchases": "latest",
       "react-native-safe-area-context": "latest",
@@ -101,7 +102,7 @@ export async function scaffoldMintApp(input: AppScaffoldInput): Promise<AppScaff
     devDependencies: {
       "@types/node": "latest",
       "@types/react": "latest",
-      eslint: "latest",
+      eslint: "^9.39.1",
       "eslint-config-expo": "latest",
       prettier: "latest",
       tsx: "latest",
@@ -198,7 +199,7 @@ export async function scaffoldMintApp(input: AppScaffoldInput): Promise<AppScaff
       null,
       2,
     )}\n`,
-    "eslint.config.js": `import expo from "eslint-config-expo/flat";\n\nexport default [\n  ...expo,\n  {\n    ignores: ["dist/**", ".expo/**", "coverage/**"],\n  },\n];\n`,
+    "eslint.config.js": `import expo from "eslint-config-expo/flat.js";\n\nexport default [\n  ...expo,\n  {\n    ignores: ["dist/**", ".expo/**", "coverage/**"],\n  },\n];\n`,
     "prettier.config.cjs": `module.exports = {\n  printWidth: 110,\n  semi: true,\n  singleQuote: false,\n  trailingComma: "all",\n};\n`,
     "vitest.config.ts": `import {defineConfig} from "vitest/config";\n\nexport default defineConfig({\n  test: {\n    environment: "node",\n    include: ["src/**/*.test.ts", "server/**/*.test.ts"],\n  },\n});\n`,
     ".gitignore": `node_modules/\n.expo/\ndist/\ncoverage/\n.env\n.env.*\n!.env.example\n.DS_Store\n`,

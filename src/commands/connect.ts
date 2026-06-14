@@ -220,7 +220,7 @@ function resultFromCredentialInspection(
       message: `${spec.label} is already configured${inspection.source ? ` via ${inspection.source}` : ""}.`,
       variables: inspection.variables,
       missing: [],
-      nextSteps: ["Return to the setup flow", "Press Enter to validate this provider"],
+      nextSteps: ["Run mint new <app-name> to continue setup", "Run mint doctor to inspect this workspace"],
     };
   }
 
@@ -234,7 +234,7 @@ function resultFromCredentialInspection(
     nextSteps: [
       `Run ${mintCommand(spec.commandArgs)} and paste the value when prompted`,
       `Or set ${inspection.missing.join(", ")} in ${envFile}`,
-      "Return to the setup flow and press Enter",
+      "Run mint new <app-name> after updating the value",
     ],
   };
 }

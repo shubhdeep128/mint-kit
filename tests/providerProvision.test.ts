@@ -1,9 +1,9 @@
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {describe, expect, it} from "vitest";
 import {createBundleIdentifier} from "../src/core/appScaffold.js";
-import {provisionPostHog, provisionRevenueCat, validatePostHogAccess, validateRevenueCatAccess} from "../src/core/providerProvision.js";
+import {provisionEas, provisionPostHog, provisionRevenueCat, validatePostHogAccess, validateRevenueCatAccess} from "../src/core/providerProvision.js";
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {status});
@@ -111,7 +111,7 @@ describe("provider provisioning", () => {
     }) as typeof fetch;
 
     try {
-      await writeFile(join(root, ".env.local"), "REVENUECAT_API_KEY=sk_test\n");
+      await writeFile(join(root, ".env.local"), "REVENUECAT_API_KEY=atk_test\n");
 
       const result = await provisionRevenueCat({
         appRoot,
@@ -139,6 +139,68 @@ describe("provider provisioning", () => {
       const rollback = await result.rollback?.run();
       expect(rollback?.success).toBe(true);
       expect(calls.filter(call => call.method === "DELETE")).toHaveLength(2);
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+
+  it("uses an existing RevenueCat project for project-scoped secret keys", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mint-revenuecat-"));
+    const appRoot = join(root, "app");
+    const calls: Array<{url: string; method: string; body?: unknown}> = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = String(url);
+      const method = init?.method ?? "GET";
+      calls.push({
+        url: requestUrl,
+        method,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+
+      if (requestUrl.endsWith("/v2/projects?limit=1") && method === "GET") {
+        return jsonResponse({items: [{id: "proj_existing", name: "Existing Project"}]});
+      }
+      if (requestUrl.endsWith("/proj_existing/apps") && method === "POST") {
+        const body = typeof init?.body === "string" ? (JSON.parse(init.body) as {type: string}) : {type: ""};
+        return jsonResponse({id: body.type === "app_store" ? "existing_ios" : "existing_android"}, 201);
+      }
+      if (requestUrl.includes("/existing_ios/public_api_keys")) {
+        return jsonResponse({items: [{key: "appl_existing"}]});
+      }
+      if (requestUrl.includes("/existing_android/public_api_keys")) {
+        return jsonResponse({items: [{key: "goog_existing"}]});
+      }
+      if (method === "DELETE") {
+        return jsonResponse({deleted_at: Date.now()});
+      }
+
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    try {
+      await writeFile(join(root, ".env.local"), "REVENUECAT_API_KEY=sk_test\n");
+
+      const result = await provisionRevenueCat({
+        appRoot,
+        credentialsRoot: root,
+        appName: "Dream Coach",
+        fetchFn,
+      });
+      const env = await readFile(join(appRoot, ".env.local"), "utf8");
+
+      expect(result.connected).toBe(true);
+      expect(result.details.join("\n")).toContain("Project used: Existing Project (proj_existing)");
+      expect(env).toContain("EXPO_PUBLIC_REVENUECAT_IOS_API_KEY=appl_existing");
+      expect(env).toContain("EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY=goog_existing");
+      expect(calls).not.toContainEqual(
+        expect.objectContaining({
+          url: "https://api.revenuecat.com/v2/projects",
+          method: "POST",
+        }),
+      );
+
+      const rollback = await result.rollback?.run();
+      expect(rollback?.details.join("\n")).toContain("pre-existing");
     } finally {
       await rm(root, {recursive: true, force: true});
     }
@@ -203,6 +265,113 @@ describe("provider provisioning", () => {
           method: "DELETE",
         }),
       );
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+
+  it("uses an existing PostHog project when project creation is capped", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mint-posthog-"));
+    const appRoot = join(root, "app");
+    const calls: Array<{url: string; method: string; body?: unknown}> = [];
+    const fetchFn = (async (url: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = String(url);
+      const method = init?.method ?? "GET";
+      calls.push({
+        url: requestUrl,
+        method,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      });
+
+      if (requestUrl.endsWith("/api/organizations/@current")) {
+        return jsonResponse({id: "org_123"});
+      }
+      if (requestUrl.endsWith("/api/organizations/org_123/projects/") && method === "POST") {
+        return jsonResponse({detail: "Project limit reached"}, 403);
+      }
+      if (requestUrl.endsWith("/api/organizations/org_123/projects/?limit=1")) {
+        return jsonResponse({results: [{id: 42, name: "Default project", api_token: "phc_existing"}]});
+      }
+      if (method === "DELETE") {
+        return jsonResponse({deleted: true});
+      }
+
+      return jsonResponse({}, 404);
+    }) as typeof fetch;
+
+    try {
+      await writeFile(join(root, ".env.local"), "POSTHOG_PERSONAL_API_KEY=phx_test\nPOSTHOG_HOST=https://us.posthog.com\n");
+
+      const result = await provisionPostHog({
+        appRoot,
+        credentialsRoot: root,
+        appName: "Dream Coach",
+        fetchFn,
+      });
+      const env = await readFile(join(appRoot, ".env.local"), "utf8");
+
+      expect(result.connected).toBe(true);
+      expect(result.details.join("\n")).toContain("Project used: Default project (42)");
+      expect(result.rollback).toBeUndefined();
+      expect(env).toContain("EXPO_PUBLIC_POSTHOG_KEY=phc_existing");
+      expect(calls.filter(call => call.method === "DELETE")).toHaveLength(0);
+    } finally {
+      await rm(root, {recursive: true, force: true});
+    }
+  });
+
+  it("temporarily removes Expo plugins while initializing EAS before dependencies are installed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mint-eas-"));
+    const appRoot = join(root, "app");
+    const appJsonPath = join(appRoot, "app.json");
+
+    try {
+      await mkdir(appRoot, {recursive: true});
+      await writeFile(join(root, ".env.local"), "EXPO_TOKEN=expo_test\n");
+      await writeFile(
+        appJsonPath,
+        JSON.stringify(
+          {
+            expo: {
+              name: "Dream Coach",
+              slug: "dream-coach",
+              plugins: ["expo-router", "expo-secure-store"],
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const runner = {
+        async run(command: string, args: string[]) {
+          const appJsonDuringInit = JSON.parse(await readFile(appJsonPath, "utf8")) as {expo?: {plugins?: unknown; extra?: unknown}};
+
+          expect(command).toBe("npx");
+          expect(args).toEqual(["--yes", "eas-cli@latest", "project:init", "--non-interactive", "--force"]);
+          expect(appJsonDuringInit.expo?.plugins).toBeUndefined();
+
+          appJsonDuringInit.expo ??= {};
+          appJsonDuringInit.expo.extra = {eas: {projectId: "eas_123"}};
+          await writeFile(appJsonPath, `${JSON.stringify(appJsonDuringInit, null, 2)}\n`);
+
+          return {exitCode: 0, stdout: "linked", stderr: ""};
+        },
+      };
+
+      const result = await provisionEas({
+        appRoot,
+        credentialsRoot: root,
+        appName: "Dream Coach",
+        runner,
+      });
+      const appJsonAfterInit = JSON.parse(await readFile(appJsonPath, "utf8")) as {
+        expo?: {plugins?: unknown; extra?: {eas?: {projectId?: string}}};
+      };
+
+      expect(result.connected).toBe(true);
+      expect(appJsonAfterInit.expo?.plugins).toEqual(["expo-router", "expo-secure-store"]);
+      expect(appJsonAfterInit.expo?.extra?.eas?.projectId).toBe("eas_123");
     } finally {
       await rm(root, {recursive: true, force: true});
     }

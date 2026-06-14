@@ -1,17 +1,46 @@
 {
-  "name": "@usemint/cli",
-  "version": "0.0.0",
+  "name": "mint-kit",
+  "version": "0.1.0",
+  "description": "Create production-ready Expo app shells with Supabase, RevenueCat, PostHog, EAS, onboarding, backend, and agent rules.",
   "private": false,
   "type": "module",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.1",
   "bin": {
     "mint": "./dist/index.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "docs",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shubhdeep128/mint-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shubhdeep128/mint-kit/issues"
+  },
+  "homepage": "https://github.com/shubhdeep128/mint-kit#readme",
+  "keywords": [
+    "expo",
+    "expo-router",
+    "supabase",
+    "revenuecat",
+    "posthog",
+    "eas",
+    "react-native",
+    "cli",
+    "starter",
+    "app-template"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsup",
@@ -20,7 +49,8 @@
     "smoke:pack": "node scripts/smoke-packed-cli.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "verify": "pnpm test && pnpm typecheck && pnpm build && pnpm smoke:dist && pnpm smoke:pack"
+    "verify": "pnpm test && pnpm typecheck && pnpm build && pnpm smoke:dist && pnpm smoke:pack",
+    "prepublishOnly": "pnpm verify"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",

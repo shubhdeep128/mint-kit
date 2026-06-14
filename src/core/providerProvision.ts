@@ -69,6 +69,8 @@ type EasValidationInput = ValidationInput & {
   runner: CommandRunner;
 };
 
+const easCliPackage = "eas-cli@latest";
+
 type RevenueCatCreatedApp = {
   appId: string;
   publicKey: string;
@@ -77,6 +79,7 @@ type RevenueCatCreatedApp = {
 type RevenueCatCreatedResources = {
   apiKey: string;
   projectId: string;
+  projectCreated: boolean;
   ios?: RevenueCatCreatedApp | undefined;
   android?: RevenueCatCreatedApp | undefined;
   fetchFn: typeof fetch;
@@ -225,6 +228,11 @@ function extractRevenueCatProjectId(value: unknown): string | undefined {
   return requireString(record.id) ?? requireString(objectValue(record.project).id);
 }
 
+function extractRevenueCatProjectName(value: unknown): string | undefined {
+  const record = objectValue(value);
+  return requireString(record.name) ?? requireString(objectValue(record.project).name);
+}
+
 function extractRevenueCatAppId(value: unknown): string | undefined {
   const record = objectValue(value);
   return requireString(record.id) ?? requireString(objectValue(record.app).id);
@@ -261,6 +269,11 @@ function extractPostHogProjectId(value: unknown): string | undefined {
   }
 
   return requireString(record.id) ?? requireString(record.project_id);
+}
+
+function extractPostHogProjectName(value: unknown): string | undefined {
+  const record = objectValue(value);
+  return requireString(record.name);
 }
 
 function extractPostHogProjectToken(value: unknown): string | undefined {
@@ -372,10 +385,17 @@ async function validateRevenueCatApiKey(
   return {
     ok: true,
     message: "RevenueCat API v2 credential validated.",
-    details: [
-      "RevenueCat project API is reachable.",
-      "Mint will use project_configuration:projects:read_write during apply.",
-    ],
+    details:
+      kind === "oauth"
+        ? [
+            "RevenueCat project API is reachable.",
+            "Mint will create a new RevenueCat project during apply.",
+          ]
+        : [
+            "RevenueCat project API is reachable.",
+            "Mint will use the accessible existing RevenueCat project during apply.",
+            "Use a RevenueCat OAuth token (`atk_...`) if you want Mint to create a brand-new RevenueCat project.",
+          ],
     nextSteps: [],
   };
 }
@@ -476,8 +496,8 @@ export async function validateEasAccess(input: EasValidationInput): Promise<Prov
     };
   }
 
-  reportProgress(input, "EAS: Validating Expo token", "npx --yes eas-cli account:view");
-  const result = await input.runner.run("npx", ["--yes", "eas-cli", "account:view"], {
+  reportProgress(input, "EAS: Validating Expo token", `npx --yes ${easCliPackage} account:view`);
+  const result = await input.runner.run("npx", ["--yes", easCliPackage, "account:view"], {
     env: {
       EXPO_TOKEN: expoToken,
     },
@@ -543,10 +563,63 @@ function createRevenueCatRollback(resources: RevenueCatCreatedResources): Provid
         success: results.every(result => result.success),
         details: [
           ...results.map(result => result.detail),
-          "RevenueCat does not expose a documented project delete endpoint in API v2; delete the empty project manually if needed.",
+          resources.projectCreated
+            ? "RevenueCat does not expose a documented project delete endpoint in API v2; delete the empty project manually if needed."
+            : "RevenueCat project was pre-existing; Mint only rolled back apps it created.",
         ],
       };
     },
+  };
+}
+
+async function findAccessibleRevenueCatProject(
+  input: Pick<RevenueCatProvisionInput, "onProgress">,
+  fetchFn: typeof fetch,
+  apiKey: string,
+): Promise<{ok: true; projectId: string; projectName?: string | undefined} | {ok: false; result: ProviderProvisionResult}> {
+  reportProgress(input, "RevenueCat: Finding accessible project", "GET /v2/projects?limit=1");
+  const projects = await httpJson(fetchFn, "https://api.revenuecat.com/v2/projects?limit=1", {
+    method: "GET",
+    headers: authHeaders(apiKey),
+  });
+
+  if (!projects.ok) {
+    const failure = revenueCatAuthFailureDetails(projects.status, projects.text);
+    return {
+      ok: false,
+      result: {
+        provider: "revenuecat",
+        connected: false,
+        message: "RevenueCat project lookup failed.",
+        details: failure.details,
+        nextSteps: failure.nextSteps,
+      },
+    };
+  }
+
+  const project = listItems(projects.data)[0];
+  const projectId = extractRevenueCatProjectId(project);
+
+  if (!projectId) {
+    return {
+      ok: false,
+      result: {
+        provider: "revenuecat",
+        connected: false,
+        message: "RevenueCat project lookup did not return a usable project.",
+        details: ["The key is valid, but RevenueCat did not return any accessible projects."],
+        nextSteps: [
+          "Create a RevenueCat project manually and generate a project configuration key.",
+          "Or use a RevenueCat OAuth token (`atk_...`) so Mint can create the project.",
+        ],
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    projectId,
+    projectName: extractRevenueCatProjectName(project),
   };
 }
 
@@ -578,6 +651,62 @@ function createPostHogRollback(resources: PostHogCreatedResources): ProviderRoll
   };
 }
 
+async function findAccessiblePostHogProject(
+  input: Pick<PostHogProvisionInput, "onProgress">,
+  fetchFn: typeof fetch,
+  host: string,
+  apiKey: string,
+  organizationId: string,
+): Promise<
+  | {ok: true; projectId: string; projectToken: string; projectName?: string | undefined}
+  | {ok: false; details: string[]; nextSteps: string[]}
+> {
+  reportProgress(input, "PostHog: Finding accessible project", `${host}/api/organizations/${organizationId}/projects/?limit=1`);
+  const projects = await httpJson(fetchFn, `${host}/api/organizations/${organizationId}/projects/?limit=1`, {
+    method: "GET",
+    headers: authHeaders(apiKey),
+  });
+
+  if (!projects.ok) {
+    return {
+      ok: false,
+      details: [`HTTP ${projects.status}`, projects.text].filter(Boolean),
+      nextSteps: ["Check PostHog personal API key and host."],
+    };
+  }
+
+  const project = listItems(projects.data)[0];
+  const projectId = extractPostHogProjectId(project);
+  let projectToken = extractPostHogProjectToken(project);
+  const projectName = extractPostHogProjectName(project);
+
+  if (projectId && !projectToken) {
+    reportProgress(input, "PostHog: Fetching existing project token", projectId);
+    const detail = await httpJson(fetchFn, `${host}/api/organizations/${organizationId}/projects/${projectId}/`, {
+      method: "GET",
+      headers: authHeaders(apiKey),
+    });
+    if (detail.ok) {
+      projectToken = extractPostHogProjectToken(detail.data);
+    }
+  }
+
+  if (!projectId || !projectToken) {
+    return {
+      ok: false,
+      details: ["PostHog did not return a usable existing project with a public project token."],
+      nextSteps: ["Open PostHog project settings and copy the project API key into .env.local."],
+    };
+  }
+
+  return {
+    ok: true,
+    projectId,
+    projectToken,
+    projectName,
+  };
+}
+
 function createEasRollback(appRoot: string, projectId?: string | undefined): ProviderRollbackTask {
   return {
     provider: "expo",
@@ -598,6 +727,58 @@ function createEasRollback(appRoot: string, projectId?: string | undefined): Pro
       };
     },
   };
+}
+
+type ExpoPluginsSnapshot = {
+  appJsonPath: string;
+  originalRaw: string;
+  plugins?: unknown;
+  hadPlugins: boolean;
+};
+
+async function removeExpoPluginsForEasInit(appRoot: string): Promise<ExpoPluginsSnapshot | undefined> {
+  try {
+    const appJsonPath = join(appRoot, "app.json");
+    const originalRaw = await readFile(appJsonPath, "utf8");
+    const parsed = JSON.parse(originalRaw) as {expo?: {plugins?: unknown}};
+
+    if (!parsed.expo || !("plugins" in parsed.expo)) {
+      return {
+        appJsonPath,
+        originalRaw,
+        hadPlugins: false,
+      };
+    }
+
+    const plugins = parsed.expo.plugins;
+    delete parsed.expo.plugins;
+    await writeFile(appJsonPath, `${JSON.stringify(parsed, null, 2)}\n`);
+
+    return {
+      appJsonPath,
+      originalRaw,
+      plugins,
+      hadPlugins: true,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function restoreExpoPluginsAfterEasInit(snapshot: ExpoPluginsSnapshot | undefined): Promise<void> {
+  if (!snapshot?.hadPlugins) {
+    return;
+  }
+
+  try {
+    const raw = await readFile(snapshot.appJsonPath, "utf8");
+    const parsed = JSON.parse(raw) as {expo?: {plugins?: unknown}};
+    parsed.expo ??= {};
+    parsed.expo.plugins = snapshot.plugins;
+    await writeFile(snapshot.appJsonPath, `${JSON.stringify(parsed, null, 2)}\n`);
+  } catch {
+    await writeFile(snapshot.appJsonPath, snapshot.originalRaw);
+  }
 }
 
 export async function provisionRevenueCat(input: RevenueCatProvisionInput): Promise<ProviderProvisionResult> {
@@ -632,46 +813,82 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
 
   const appIdentifier = createBundleIdentifier(input.appName);
   const revenueCatApiKey = apiKey;
+  const credentialKind = revenueCatCredentialKind(revenueCatApiKey);
   let projectId: string | undefined;
+  let projectName: string | undefined;
+  let projectCreated = false;
   let ios: RevenueCatCreatedApp | undefined;
   let android: RevenueCatCreatedApp | undefined;
 
-  reportProgress(input, "RevenueCat: Creating project", input.appName);
-  const project = await httpJson(fetchFn, "https://api.revenuecat.com/v2/projects", {
-    method: "POST",
-    headers: authHeaders(revenueCatApiKey, true),
-    body: JSON.stringify({name: input.appName}),
-  });
+  if (credentialKind === "oauth") {
+    reportProgress(input, "RevenueCat: Creating project", input.appName);
+    const project = await httpJson(fetchFn, "https://api.revenuecat.com/v2/projects", {
+      method: "POST",
+      headers: authHeaders(revenueCatApiKey, true),
+      body: JSON.stringify({name: input.appName}),
+    });
 
-  if (!project.ok) {
-    const failure = revenueCatAuthFailureDetails(project.status, project.text);
+    if (!project.ok) {
+      const failure = revenueCatAuthFailureDetails(project.status, project.text);
+      return {
+        provider: "revenuecat",
+        connected: false,
+        message: "RevenueCat project creation failed.",
+        details: failure.details,
+        nextSteps: failure.nextSteps,
+      };
+    }
+
+    projectId = extractRevenueCatProjectId(project.data);
+    projectName = extractRevenueCatProjectName(project.data) ?? input.appName;
+    projectCreated = true;
+
+    if (!projectId) {
+      return {
+        provider: "revenuecat",
+        connected: false,
+        message: "RevenueCat project was created, but Mint could not read the project id.",
+        details: [project.text],
+        nextSteps: ["Open RevenueCat and copy SDK keys into .env.local manually."],
+      };
+    }
+  } else if (credentialKind === "secret") {
+    const existingProject = await findAccessibleRevenueCatProject(input, fetchFn, revenueCatApiKey);
+
+    if (!existingProject.ok) {
+      return existingProject.result;
+    }
+
+    projectId = existingProject.projectId;
+    projectName = existingProject.projectName;
+  } else {
     return {
       provider: "revenuecat",
       connected: false,
-      message: "RevenueCat project creation failed.",
-      details: failure.details,
-      nextSteps: failure.nextSteps,
+      message: "RevenueCat API key cannot provision projects.",
+      details: ["Mint needs a RevenueCat API v2 secret key (`sk_...`) or OAuth token (`atk_...`)."],
+      nextSteps: ["Run mint connect revenuecat --api-key <sk_...>"],
     };
   }
-
-  projectId = extractRevenueCatProjectId(project.data);
 
   if (!projectId) {
     return {
       provider: "revenuecat",
       connected: false,
-      message: "RevenueCat project was created, but Mint could not read the project id.",
-      details: [project.text],
-      nextSteps: ["Open RevenueCat and copy SDK keys into .env.local manually."],
+      message: "RevenueCat project selection failed.",
+      details: ["Mint could not determine which RevenueCat project to configure."],
+      nextSteps: ["Run mint connect revenuecat again, then retry mint new."],
     };
   }
+
+  const revenueCatProjectId = projectId;
 
   async function createApp(name: string, type: "app_store" | "play_store"): Promise<RevenueCatCreatedApp> {
     const platformBody =
       type === "app_store" ? {app_store: {bundle_id: appIdentifier}} : {play_store: {package_name: appIdentifier}};
 
     reportProgress(input, `RevenueCat: Creating ${type} app`, name);
-    const app = await httpJson(fetchFn, `https://api.revenuecat.com/v2/projects/${projectId}/apps`, {
+    const app = await httpJson(fetchFn, `https://api.revenuecat.com/v2/projects/${revenueCatProjectId}/apps`, {
       method: "POST",
       headers: authHeaders(revenueCatApiKey, true),
       body: JSON.stringify({name, type, ...platformBody}),
@@ -687,7 +904,7 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
     }
 
     reportProgress(input, `RevenueCat: Fetching ${type} SDK key`, appId);
-    const keys = await httpJson(fetchFn, `https://api.revenuecat.com/v2/projects/${projectId}/apps/${appId}/public_api_keys`, {
+    const keys = await httpJson(fetchFn, `https://api.revenuecat.com/v2/projects/${revenueCatProjectId}/apps/${appId}/public_api_keys`, {
       method: "GET",
       headers: authHeaders(revenueCatApiKey),
     });
@@ -714,7 +931,7 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
       EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: android.publicKey,
     });
     await markProvider(input.appRoot, "revenuecat", "connected", {
-      projectId,
+      projectId: revenueCatProjectId,
       iosAppId: ios.appId,
       androidAppId: android.appId,
       envFile: envResult.path,
@@ -725,12 +942,18 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
       provider: "revenuecat",
       connected: true,
       message: "RevenueCat project, apps, and SDK keys configured.",
-      details: [`Project: ${projectId}`, `iOS app: ${ios.appId}`, `Android app: ${android.appId}`],
+      details: [
+        projectCreated
+          ? `Project created: ${projectName ?? revenueCatProjectId} (${revenueCatProjectId})`
+          : `Project used: ${projectName ? `${projectName} (${revenueCatProjectId})` : revenueCatProjectId}`,
+        `iOS app: ${ios.appId}`,
+        `Android app: ${android.appId}`,
+      ],
       nextSteps: [],
-      rollback: createRevenueCatRollback({apiKey: revenueCatApiKey, projectId, ios, android, fetchFn}),
+      rollback: createRevenueCatRollback({apiKey: revenueCatApiKey, projectId: revenueCatProjectId, projectCreated, ios, android, fetchFn}),
     };
   } catch (error) {
-    const rollback = createRevenueCatRollback({apiKey: revenueCatApiKey, projectId, ios, android, fetchFn});
+    const rollback = createRevenueCatRollback({apiKey: revenueCatApiKey, projectId: revenueCatProjectId, projectCreated, ios, android, fetchFn});
     const cleanup = await rollback.run();
 
     return {
@@ -739,7 +962,7 @@ export async function provisionRevenueCat(input: RevenueCatProvisionInput): Prom
       message: "RevenueCat setup failed after project creation.",
       details: [
         error instanceof Error ? error.message : "Unknown RevenueCat setup failure",
-        `Project: ${projectId}`,
+        `Project: ${revenueCatProjectId}`,
         ...cleanup.details,
       ].filter((detail): detail is string => Boolean(detail)),
       nextSteps: cleanup.success
@@ -808,6 +1031,9 @@ export async function provisionPostHog(input: PostHogProvisionInput): Promise<Pr
     };
   }
 
+  let projectCreated = false;
+  let projectText = "";
+
   reportProgress(input, "PostHog: Creating project", input.appName);
   const project = await httpJson(fetchFn, `${host}/api/organizations/${organizationId}/projects/`, {
     method: "POST",
@@ -815,18 +1041,33 @@ export async function provisionPostHog(input: PostHogProvisionInput): Promise<Pr
     body: JSON.stringify({name: input.appName}),
   });
 
-  if (!project.ok) {
-    return {
-      provider: "posthog",
-      connected: false,
-      message: "PostHog project creation failed.",
-      details: [`HTTP ${project.status}`, project.text].filter(Boolean),
-      nextSteps: ["Check PostHog personal API key project write permissions."],
-    };
-  }
+  let projectId: string | undefined;
+  let projectName: string | undefined;
+  let projectToken: string | undefined;
 
-  const projectId = extractPostHogProjectId(project.data);
-  let projectToken = extractPostHogProjectToken(project.data);
+  if (project.ok) {
+    projectCreated = true;
+    projectText = project.text;
+    projectId = extractPostHogProjectId(project.data);
+    projectName = extractPostHogProjectName(project.data) ?? input.appName;
+    projectToken = extractPostHogProjectToken(project.data);
+  } else {
+    const existingProject = await findAccessiblePostHogProject(input, fetchFn, host, apiKey, organizationId);
+
+    if (!existingProject.ok) {
+      return {
+        provider: "posthog",
+        connected: false,
+        message: "PostHog project creation failed.",
+        details: [`HTTP ${project.status}`, project.text, ...existingProject.details].filter(Boolean),
+        nextSteps: existingProject.nextSteps,
+      };
+    }
+
+    projectId = existingProject.projectId;
+    projectName = existingProject.projectName;
+    projectToken = existingProject.projectToken;
+  }
 
   if (projectId && !projectToken) {
     reportProgress(input, "PostHog: Fetching project token", projectId);
@@ -840,14 +1081,16 @@ export async function provisionPostHog(input: PostHogProvisionInput): Promise<Pr
   }
 
   if (!projectId || !projectToken) {
-    const rollback = projectId ? createPostHogRollback({apiKey, host, organizationId, projectId, fetchFn}) : undefined;
+    const rollback = projectCreated && projectId ? createPostHogRollback({apiKey, host, organizationId, projectId, fetchFn}) : undefined;
     const cleanup = rollback ? await rollback.run() : undefined;
 
     return {
       provider: "posthog",
       connected: false,
-      message: "PostHog project was created, but Mint could not read its project token.",
-      details: [project.text, ...(cleanup?.details ?? [])].filter((detail): detail is string => Boolean(detail)),
+      message: projectCreated
+        ? "PostHog project was created, but Mint could not read its project token."
+        : "PostHog existing project was found, but Mint could not read its project token.",
+      details: [projectText, ...(cleanup?.details ?? [])].filter((detail): detail is string => Boolean(detail)),
       nextSteps: cleanup?.success
         ? ["Retry mint new after fixing the PostHog token response issue."]
         : ["Open PostHog project settings and copy the project API key into .env.local."],
@@ -861,6 +1104,7 @@ export async function provisionPostHog(input: PostHogProvisionInput): Promise<Pr
   });
   await markProvider(input.appRoot, "posthog", "connected", {
     projectId,
+    projectName,
     organizationId,
     host,
     envFile: envResult.path,
@@ -871,9 +1115,14 @@ export async function provisionPostHog(input: PostHogProvisionInput): Promise<Pr
     provider: "posthog",
     connected: true,
     message: "PostHog project and client env configured.",
-    details: [`Project: ${projectId}`, `Host: ${host}`],
+    details: [
+      projectCreated
+        ? `Project created: ${projectName ?? projectId} (${projectId})`
+        : `Project used: ${projectName ? `${projectName} (${projectId})` : projectId}`,
+      `Host: ${host}`,
+    ],
     nextSteps: [],
-    rollback: createPostHogRollback({apiKey, host, organizationId, projectId, fetchFn}),
+    rollback: projectCreated ? createPostHogRollback({apiKey, host, organizationId, projectId, fetchFn}) : undefined,
   };
 }
 
@@ -903,10 +1152,12 @@ export async function provisionEas(input: EasProvisionInput): Promise<ProviderPr
     };
   }
 
-  reportProgress(input, "EAS: Creating/linking Expo project", "npx --yes eas-cli project:init --non-interactive --force");
+  const easInitCommand = `npx --yes ${easCliPackage} project:init --non-interactive --force`;
+  reportProgress(input, "EAS: Creating/linking Expo project", easInitCommand);
+  const pluginSnapshot = await removeExpoPluginsForEasInit(input.appRoot);
   const result = await input.runner.run(
     "npx",
-    ["--yes", "eas-cli", "project:init", "--non-interactive", "--force"],
+    ["--yes", easCliPackage, "project:init", "--non-interactive", "--force"],
     {
       cwd: input.appRoot,
       env: {
@@ -914,6 +1165,7 @@ export async function provisionEas(input: EasProvisionInput): Promise<ProviderPr
       },
     },
   );
+  await restoreExpoPluginsAfterEasInit(pluginSnapshot);
 
   if (result.exitCode !== 0) {
     return {
@@ -929,7 +1181,7 @@ export async function provisionEas(input: EasProvisionInput): Promise<ProviderPr
 
   await markProvider(input.appRoot, "expo", "connected", {
     projectId,
-    command: "npx --yes eas-cli project:init --non-interactive --force",
+    command: easInitCommand,
   });
   await markProvider(input.appRoot, "eas", "connected", {
     projectId,

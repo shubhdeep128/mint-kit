@@ -68,7 +68,7 @@ async function validateSetupProvider(provider: ProviderKey) {
       message:
         result.account.status === "authenticated"
           ? `Supabase validated. Found ${result.account.organizations?.length ?? 0} organization(s).`
-          : `Supabase is not logged in yet. Run ${mintCommand("connect supabase --login")}, then press Enter here again.`,
+          : `Supabase is not logged in yet. Run ${mintCommand("connect supabase --login")}, then retry provider checks.`,
     };
   }
 
