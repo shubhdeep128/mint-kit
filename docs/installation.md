@@ -17,19 +17,19 @@ Mint can use provider CLIs through `npx`, so users do not need to globally insta
 ## Run With pnpm dlx
 
 ```bash
-pnpm dlx mint-kit@latest new dreamcoach
+pnpm dlx mintstack@latest new dreamcoach
 ```
 
 ## Run With npx
 
 ```bash
-npx mint-kit@latest new dreamcoach
+npx mintstack@latest new dreamcoach
 ```
 
 ## Global Install
 
 ```bash
-pnpm add -g mint-kit
+pnpm add -g mintstack
 mint new dreamcoach
 ```
 
@@ -38,8 +38,8 @@ mint new dreamcoach
 For contributors:
 
 ```bash
-git clone https://github.com/shubhdeep128/mint-kit.git
-cd mint-kit
+git clone https://github.com/shubhdeep128/mintstack.git
+cd mintstack
 pnpm install
 pnpm dev new dreamcoach --dry-run
 pnpm verify
@@ -50,7 +50,7 @@ pnpm verify
 The cleanest flow is the single app creation command:
 
 ```bash
-pnpm dlx mint-kit@latest new dreamcoach
+pnpm dlx mintstack@latest new dreamcoach
 ```
 
 If provider access is missing, Mint pauses, tells you exactly what to run or paste, and re-validates when you return. It does not create provider resources until Supabase, RevenueCat, PostHog, and Expo/EAS are all ready.

@@ -1,5 +1,5 @@
 {
-  "name": "mint-kit",
+  "name": "mintstack",
   "version": "0.1.0",
   "description": "Create production-ready Expo app shells with Supabase, RevenueCat, PostHog, EAS, onboarding, backend, and agent rules.",
   "private": false,
@@ -7,7 +7,7 @@
   "license": "MIT",
   "packageManager": "pnpm@10.33.1",
   "bin": {
-    "mint": "./dist/index.js"
+    "mint": "dist/index.js"
   },
   "files": [
     "dist",
@@ -21,12 +21,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shubhdeep128/mint-kit.git"
+    "url": "git+https://github.com/shubhdeep128/mintstack.git"
   },
   "bugs": {
-    "url": "https://github.com/shubhdeep128/mint-kit/issues"
+    "url": "https://github.com/shubhdeep128/mintstack/issues"
   },
-  "homepage": "https://github.com/shubhdeep128/mint-kit#readme",
+  "homepage": "https://github.com/shubhdeep128/mintstack#readme",
   "keywords": [
     "expo",
     "expo-router",

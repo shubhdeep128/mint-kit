@@ -1,6 +1,6 @@
 # Publishing Guide
 
-Mint is published to npm as `mint-kit`.
+Mint is published to npm as `mintstack`.
 
 ## Preflight
 
@@ -53,8 +53,8 @@ npm publish --access public --otp <code>
 After publishing:
 
 ```bash
-pnpm dlx mint-kit@latest new smoke-app --dry-run --plain
-npx mint-kit@latest doctor --json
+pnpm dlx mintstack@latest new smoke-app --dry-run --plain
+npx mintstack@latest doctor --json
 ```
 
 ## GitHub Release

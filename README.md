@@ -7,13 +7,13 @@ It creates an Expo Router app with Supabase, RevenueCat, PostHog, EAS, an extens
 ## Quick Start
 
 ```bash
-pnpm dlx mint-kit@latest new dreamcoach
+pnpm dlx mintstack@latest new dreamcoach
 ```
 
 or:
 
 ```bash
-npx mint-kit@latest new dreamcoach
+npx mintstack@latest new dreamcoach
 ```
 
 Mint validates provider access first, then applies provider resources together. If apply fails, Mint rolls back resources it created during that run and removes the generated local app directory.
@@ -126,7 +126,7 @@ pnpm verify
 
 ## Publishing
 
-Mint is published as `mint-kit` and exposes the `mint` binary.
+Mint is published as `mintstack` and exposes the `mint` binary.
 
 ```bash
 pnpm verify
